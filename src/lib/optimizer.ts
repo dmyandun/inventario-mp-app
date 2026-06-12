@@ -36,7 +36,7 @@ export function buildRecommendations(
 
   return rows
     .filter((row) => normalize(row.nombre) !== normalize(refineryName) && row.disponible > 0)
-    .map((row) => {
+    .map((row): Recommendation => {
       const route = routes.find(
         (candidate) =>
           normalize(candidate.origen) === normalize(row.nombre) &&
@@ -50,7 +50,8 @@ export function buildRecommendations(
         0,
         Math.min(row.disponible * 0.35, targetMove, row.pendienteRetiro || row.disponible * 0.2)
       );
-      const priority = logisticsScore > 78 ? "alta" : logisticsScore > 48 ? "media" : "baja";
+      const priority: Recommendation["priority"] =
+        logisticsScore > 78 ? "alta" : logisticsScore > 48 ? "media" : "baja";
 
       return {
         id: `${row.nombre}-${row.tanque}-${row.producto}`,
