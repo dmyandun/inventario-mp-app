@@ -8,42 +8,59 @@ export async function POST(request: Request) {
   if (!process.env.HF_TOKEN) {
     return NextResponse.json({
       answer:
-        "HF_TOKEN no esta configurado. Cuando se agregue en Vercel, este endpoint enviara el contexto operativo a Hugging Face desde el servidor."
+        "HF_TOKEN no esta configurado. Agrega un token de Hugging Face con permiso para Inference Providers."
     });
   }
 
-  const model = process.env.HF_MODEL ?? "mistralai/Mistral-7B-Instruct-v0.3";
-  const prompt = [
-    "Eres un planificador logistico de materia prima para refineria.",
-    "Responde en espanol, con prioridades, riesgos y recomendaciones accionables.",
-    `Contexto operativo:\n${context}`,
-    `Pregunta:\n${question}`
-  ].join("\n\n");
+  const model = process.env.HF_MODEL ?? "openai/gpt-oss-20b:fastest";
 
-  const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.HF_TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      inputs: prompt,
-      parameters: {
-        max_new_tokens: 450,
+  try {
+    const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.HF_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        stream: false,
         temperature: 0.25,
-        return_full_text: false
-      }
-    })
-  });
+        max_tokens: 450,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Eres un planificador logistico de materia prima para refineria. Responde en espanol, con prioridades, riesgos y recomendaciones accionables."
+          },
+          {
+            role: "user",
+            content: `Contexto operativo:\n${context}\n\nPregunta:\n${question}`
+          }
+        ]
+      })
+    });
 
-  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          answer:
+            data?.error?.message ??
+            data?.error ??
+            "No se pudo completar la inferencia con Hugging Face Router."
+        },
+        { status: response.status }
+      );
+    }
+
+    const answer = data?.choices?.[0]?.message?.content;
+    return NextResponse.json({ answer: answer ?? "Sin respuesta del modelo." });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido";
     return NextResponse.json(
-      { answer: "No se pudo completar la inferencia con Hugging Face." },
-      { status: response.status }
+      { answer: `No se pudo conectar con Hugging Face Router: ${message}` },
+      { status: 502 }
     );
   }
-
-  const data = await response.json();
-  const answer = Array.isArray(data) ? data[0]?.generated_text : data.generated_text;
-  return NextResponse.json({ answer: answer ?? "Sin respuesta del modelo." });
 }
