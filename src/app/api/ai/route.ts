@@ -43,7 +43,8 @@ export async function POST(request: Request) {
                 "Responde siempre en espanol.",
                 "No muestres razonamiento interno, borradores, etiquetas <think> ni cadenas de pensamiento.",
                 "Entrega solo conclusiones accionables para operacion.",
-                "Formato: respuesta breve con prioridad, ubicacion, toneladas sugeridas, motivo y riesgo.",
+                "No uses Markdown, asteriscos, negritas, tablas ni encabezados decorativos.",
+                "Formato: bullets de texto plano con prioridad, ubicacion, toneladas sugeridas, motivo y riesgo.",
                 "Usa maximo 5 bullets y cierra con una accion inmediata."
               ].join(" ")
             },
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
       const answer = cleanAnswer(data?.choices?.[0]?.message?.content);
 
       if (response.ok && answer) {
-        return NextResponse.json({ answer: `Modelo usado: ${model}\n\n${answer}` });
+        return NextResponse.json({ answer });
       }
 
       errors.push(`${model}: ${readError(data, response.status)}`);
@@ -92,6 +93,10 @@ function cleanAnswer(value: unknown) {
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
     .replace(/^\s*(analysis|reasoning|thought)\s*:\s*/gim, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[ \t]+$/gm, "")
     .trim();
 }
 
