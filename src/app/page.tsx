@@ -32,7 +32,7 @@ export default function Home() {
   });
   const [view, setView] = useState<View>("inventario");
   const [product, setProduct] = useState("TODOS");
-  const [question, setQuestion] = useState("Que ubicaciones deberian priorizar despacho hacia refineria?");
+  const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
 
@@ -56,8 +56,15 @@ export default function Home() {
   }
 
   async function askAi(customQuestion = question) {
+    const finalQuestion = customQuestion.trim();
+    if (!finalQuestion) {
+      setView("ia");
+      return;
+    }
+
     setLoadingAi(true);
-    setQuestion(customQuestion);
+    setQuestion(finalQuestion);
+    setAnswer("");
     const context = JSON.stringify(
       {
         kpis,
@@ -77,7 +84,7 @@ export default function Home() {
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: customQuestion, context })
+        body: JSON.stringify({ question: finalQuestion, context })
       });
       const data = await response.json();
       setAnswer(data.answer);
@@ -141,7 +148,7 @@ export default function Home() {
             <button className="btn" onClick={notifyTelegram} title="Enviar alerta">
               <Send size={17} /> Telegram
             </button>
-            <button className="btn primary" onClick={() => askAi()} title="Consultar IA">
+            <button className="btn primary" onClick={() => setView("ia")} title="Abrir IA">
               <Bot size={17} /> Analizar
             </button>
           </div>
@@ -375,14 +382,18 @@ function AiView({
         <div className="section-title"><h3>Asistente IA operativo</h3></div>
         <div className="filters">
           {prompts.map((prompt) => (
-            <button className="btn" key={prompt} onClick={() => askAi(prompt)}>{prompt}</button>
+            <button className="btn" key={prompt} onClick={() => setQuestion(prompt)}>{prompt}</button>
           ))}
         </div>
-        <textarea value={question} onChange={(event) => setQuestion(event.target.value)} />
-        <button className="btn primary" onClick={() => askAi(question)} disabled={loadingAi}>
-          <Bot size={17} /> {loadingAi ? "Analizando" : "Consultar"}
+        <textarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="Escribe una consulta operativa para la IA"
+        />
+        <button className="btn primary" onClick={() => askAi(question)} disabled={loadingAi || !question.trim()}>
+          <Bot size={17} /> {loadingAi ? "Analizando" : "Consultar con IA"}
         </button>
-        <div className="answer">{answer || "La respuesta aparecerá aquí."}</div>
+        <div className="answer">{loadingAi ? "Analizando datos operativos..." : answer}</div>
       </div>
       <RecommendationsPanel recommendations={recommendations.slice(0, 5)} />
     </section>
