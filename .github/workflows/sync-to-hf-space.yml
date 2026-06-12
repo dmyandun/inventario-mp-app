@@ -1,0 +1,56 @@
+name: Sync to Hugging Face Space
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  sync-to-huggingface:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GitHub repo
+        uses: actions/checkout@v4
+
+      - name: Prepare Space files
+        run: |
+          rm -rf hf-space
+          mkdir hf-space
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            --exclude='hf-space' \
+            ./ hf-space/
+          cp Dockerfile.hf hf-space/Dockerfile
+          cat > hf-space/README.md <<'EOF'
+          ---
+          title: Inventario MP App
+          emoji: 🛢️
+          colorFrom: green
+          colorTo: blue
+          sdk: docker
+          app_port: 7860
+          pinned: false
+          ---
+
+          # Inventario MP Nacional
+
+          App Next.js para gestion nacional de inventario de materia prima, recomendaciones de movimiento hacia refineria, inferencias de Hugging Face y notificaciones por Telegram.
+          EOF
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd hf-space
+          git init
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add .
+          git commit -m "Sync from GitHub"
+          git branch -M main
+          git remote add space https://dyandun:${HF_TOKEN}@huggingface.co/spaces/dyandun/inventario-mp-app
+          git push --force space main
