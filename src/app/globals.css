@@ -160,6 +160,13 @@ button {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.mini-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -228,7 +235,7 @@ button {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 880px;
+  min-width: 760px;
   background: #fff;
 }
 
@@ -313,7 +320,7 @@ th {
 
 .ai-box textarea {
   width: 100%;
-  min-height: 96px;
+  min-height: 126px;
   border: 1px solid var(--line);
   border-radius: 7px;
   resize: vertical;
@@ -321,7 +328,7 @@ th {
 }
 
 .answer {
-  min-height: 90px;
+  min-height: 140px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcf8;
@@ -345,7 +352,8 @@ th {
   }
 
   .kpis,
-  .content-grid {
+  .content-grid,
+  .mini-grid {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -365,7 +373,8 @@ th {
 
   .nav,
   .kpis,
-  .content-grid {
+  .content-grid,
+  .mini-grid {
     grid-template-columns: 1fr;
   }
 }
