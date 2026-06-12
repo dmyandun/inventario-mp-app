@@ -1,0 +1,69 @@
+name: Sync to Hugging Face Space v2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync-to-huggingface:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout GitHub repo
+        uses: actions/checkout@v5
+
+      - name: Validate Hugging Face token
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN secret is missing in GitHub Actions."
+            exit 1
+          fi
+          echo "HF_TOKEN secret is configured."
+
+      - name: Prepare Space files
+        run: |
+          rm -rf hf-space
+          mkdir hf-space
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            --exclude='hf-space' \
+            --exclude='hf-remote' \
+            ./ hf-space/
+          cp Dockerfile.hf hf-space/Dockerfile
+          cat > hf-space/README.md <<'EOF'
+          ---
+          title: Inventario MP App
+          emoji: oil_drum
+          colorFrom: green
+          colorTo: blue
+          sdk: docker
+          app_port: 7860
+          pinned: false
+          ---
+
+          # Inventario MP Nacional
+
+          App Next.js para gestion nacional de inventario de materia prima, recomendaciones de movimiento hacia refineria, inferencias de Hugging Face y notificaciones por Telegram.
+          EOF
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git clone https://dyandun:${HF_TOKEN}@huggingface.co/spaces/dyandun/inventario-mp-app hf-remote
+          rsync -a --delete --exclude='.git' hf-space/ hf-remote/
+          cd hf-remote
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes to sync."
+            exit 0
+          fi
+          git commit -m "Sync from GitHub"
+          git push origin main
