@@ -33,13 +33,19 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           model,
           stream: false,
-          temperature: 0.25,
-          max_tokens: 450,
+          temperature: 0.2,
+          max_tokens: 520,
           messages: [
             {
               role: "system",
-              content:
-                "Eres un planificador logistico de materia prima para refineria. Responde en espanol, con prioridades, riesgos y recomendaciones accionables."
+              content: [
+                "Eres un planificador logistico de materia prima para refineria.",
+                "Responde siempre en espanol.",
+                "No muestres razonamiento interno, borradores, etiquetas <think> ni cadenas de pensamiento.",
+                "Entrega solo conclusiones accionables para operacion.",
+                "Formato: respuesta breve con prioridad, ubicacion, toneladas sugeridas, motivo y riesgo.",
+                "Usa maximo 5 bullets y cierra con una accion inmediata."
+              ].join(" ")
             },
             {
               role: "user",
@@ -50,7 +56,7 @@ export async function POST(request: Request) {
       });
 
       const data = await response.json().catch(() => null);
-      const answer = data?.choices?.[0]?.message?.content;
+      const answer = cleanAnswer(data?.choices?.[0]?.message?.content);
 
       if (response.ok && answer) {
         return NextResponse.json({ answer: `Modelo usado: ${model}\n\n${answer}` });
@@ -77,6 +83,16 @@ function getModelChain() {
     .filter((model): model is string => Boolean(model));
 
   return Array.from(new Set([...configured, ...defaultModels]));
+}
+
+function cleanAnswer(value: unknown) {
+  if (typeof value !== "string") return "";
+
+  return value
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+    .replace(/^\s*(analysis|reasoning|thought)\s*:\s*/gim, "")
+    .trim();
 }
 
 function readError(data: unknown, status: number) {
