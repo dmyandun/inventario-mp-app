@@ -211,6 +211,129 @@ button {
   font-size: 17px;
 }
 
+.section-note {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-card {
+  min-width: 0;
+}
+
+.trend {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.trend.up {
+  background: #e5f0dd;
+  color: var(--green);
+}
+
+.trend.down {
+  background: #f9ded9;
+  color: var(--red);
+}
+
+.chart-wrap {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcf8;
+}
+
+.chart-wrap svg {
+  width: 100%;
+  display: block;
+}
+
+.chart-wrap text {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.gridline {
+  stroke: #dfe5d8;
+  stroke-width: 1;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.available-line {
+  stroke: var(--green);
+}
+
+.inventory-line {
+  stroke: var(--blue);
+}
+
+.available-dot {
+  fill: var(--green);
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.inventory-dot {
+  fill: var(--blue);
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: center;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-dot.available {
+  background: var(--green);
+}
+
+.legend-dot.inventory {
+  background: var(--blue);
+}
+
+.empty-state {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+  padding: 18px;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;

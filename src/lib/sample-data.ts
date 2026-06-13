@@ -1,6 +1,6 @@
 import { InventoryRow, RouteCost } from "./types";
 
-export const sampleInventory: InventoryRow[] = [
+const latestSampleInventory: InventoryRow[] = [
   {
     fecha: "2026-05-29",
     tipo: "REFINERIA",
@@ -93,9 +93,29 @@ export const sampleInventory: InventoryRow[] = [
   }
 ];
 
+export const sampleInventory: InventoryRow[] = [
+  ...buildSampleSnapshot(latestSampleInventory, "2026-05-27", 0.88),
+  ...buildSampleSnapshot(latestSampleInventory, "2026-05-28", 0.94),
+  ...latestSampleInventory
+];
+
 export const sampleRoutes: RouteCost[] = [
   { origen: "QUEVEDO", destino: "DANEC SANGOLQUI", km: 250, costoPorKm: 1.22 },
   { origen: "MANTA", destino: "DANEC SANGOLQUI", km: 390, costoPorKm: 1.35 },
   { origen: "GUAYAQUIL", destino: "DANEC SANGOLQUI", km: 420, costoPorKm: 1.28 },
   { origen: "SANTO DOMINGO", destino: "DANEC SANGOLQUI", km: 115, costoPorKm: 1.18 }
 ];
+
+function buildSampleSnapshot(rows: InventoryRow[], fecha: string, factor: number): InventoryRow[] {
+  return rows.map((row) => ({
+    ...row,
+    fecha,
+    inventario: Math.round(row.inventario * factor),
+    disponible: Math.round(row.disponible * factor),
+    pedido: Math.round(row.pedido * factor),
+    retirado: Math.round(row.retirado * factor),
+    pendienteRetiro: Math.round(row.pendienteRetiro * factor),
+    transito: Math.round(row.transito * factor),
+    importaciones: Math.round(row.importaciones * factor)
+  }));
+}

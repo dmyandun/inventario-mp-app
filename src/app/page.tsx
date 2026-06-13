@@ -7,6 +7,7 @@ import {
   Factory,
   FileSpreadsheet,
   Gauge,
+  LineChart,
   PackageCheck,
   Route,
   Send,
@@ -37,12 +38,14 @@ export default function Home() {
   const [loadingAi, setLoadingAi] = useState(false);
 
   const products = useMemo(() => ["TODOS", ...Array.from(new Set(rows.map((row) => row.producto)))], [rows]);
-  const filteredRows = product === "TODOS" ? rows : rows.filter((row) => row.producto === product);
-  const refineryRows = filteredRows.filter((row) => normalize(row.nombre) === normalize(refineryName));
-  const originRows = filteredRows.filter((row) => normalize(row.nombre) !== normalize(refineryName));
-  const kpis = getKpis(filteredRows);
+  const productRows = product === "TODOS" ? rows : rows.filter((row) => row.producto === product);
+  const currentRows = getLatestInventoryRows(productRows);
+  const inventoryHistory = buildInventoryHistory(productRows);
+  const refineryRows = currentRows.filter((row) => normalize(row.nombre) === normalize(refineryName));
+  const originRows = currentRows.filter((row) => normalize(row.nombre) !== normalize(refineryName));
+  const kpis = getKpis(currentRows);
   const refineryKpis = getKpis(refineryRows);
-  const recommendations = buildRecommendations(filteredRows, sampleRoutes, fleet);
+  const recommendations = buildRecommendations(currentRows, sampleRoutes, fleet);
   const dailyFleetCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   const refineryOpenDemand = Math.max(
     0,
@@ -74,7 +77,8 @@ export default function Home() {
         fleet,
         routes: sampleRoutes,
         topRecommendations: recommendations.slice(0, 8),
-        rows: filteredRows.slice(0, 30)
+        inventoryHistory,
+        rows: currentRows.slice(0, 30)
       },
       null,
       2
@@ -163,13 +167,14 @@ export default function Home() {
 
         {view === "inventario" && (
           <InventoryView
-            rows={filteredRows}
+            rows={currentRows}
             products={products}
             product={product}
             setProduct={setProduct}
             fleet={fleet}
             setFleet={setFleet}
             recommendations={recommendations}
+            history={inventoryHistory}
           />
         )}
 
@@ -215,7 +220,8 @@ function InventoryView({
   setProduct,
   fleet,
   setFleet,
-  recommendations
+  recommendations,
+  history
 }: {
   rows: InventoryRow[];
   products: string[];
@@ -224,40 +230,126 @@ function InventoryView({
   fleet: FleetInput;
   setFleet: (value: FleetInput) => void;
   recommendations: ReturnType<typeof buildRecommendations>;
+  history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
 }) {
   return (
     <section className="grid content-grid">
-      <div className="card">
-        <div className="section-title">
-          <h3>Inventario por tanque</h3>
-          <div className="filters">
-            <select value={product} onChange={(event) => setProduct(event.target.value)} aria-label="Producto">
-              {products.map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min="0"
-              value={fleet.unidades}
-              onChange={(event) => setFleet({ ...fleet, unidades: Number(event.target.value) })}
-              aria-label="Unidades de flota"
-              title="Unidades de flota"
-            />
-            <input
-              type="number"
-              min="0"
-              value={fleet.toneladasPorUnidad}
-              onChange={(event) => setFleet({ ...fleet, toneladasPorUnidad: Number(event.target.value) })}
-              aria-label="Toneladas por unidad"
-              title="Toneladas por unidad"
-            />
+      <div className="grid">
+        <InventoryHistoryChart history={history} />
+        <div className="card">
+          <div className="section-title">
+            <h3>Inventario por tanque</h3>
+            <div className="filters">
+              <select value={product} onChange={(event) => setProduct(event.target.value)} aria-label="Producto">
+                {products.map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min="0"
+                value={fleet.unidades}
+                onChange={(event) => setFleet({ ...fleet, unidades: Number(event.target.value) })}
+                aria-label="Unidades de flota"
+                title="Unidades de flota"
+              />
+              <input
+                type="number"
+                min="0"
+                value={fleet.toneladasPorUnidad}
+                onChange={(event) => setFleet({ ...fleet, toneladasPorUnidad: Number(event.target.value) })}
+                aria-label="Toneladas por unidad"
+                title="Toneladas por unidad"
+              />
+            </div>
           </div>
+          <InventoryTable rows={rows} />
         </div>
-        <InventoryTable rows={rows} />
       </div>
       <RecommendationsPanel recommendations={recommendations} />
     </section>
+  );
+}
+
+function InventoryHistoryChart({
+  history
+}: {
+  history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
+}) {
+  if (history.length === 0) {
+    return (
+      <div className="card history-card">
+        <div className="section-title">
+          <div>
+            <h3>Histórico de inventario</h3>
+            <p className="section-note">Totales por fecha del inventario filtrado.</p>
+          </div>
+        </div>
+        <div className="empty-state">Carga un Excel con fechas para ver la evolución del inventario.</div>
+      </div>
+    );
+  }
+
+  const width = 720;
+  const height = 260;
+  const padding = { top: 18, right: 20, bottom: 34, left: 58 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const maxValue = Math.max(...history.flatMap((point) => [point.disponible, point.inventario, point.capacidad]), 1);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(maxValue * ratio));
+  const latest = history[history.length - 1];
+  const first = history[0];
+  const change = latest && first ? latest.disponible - first.disponible : 0;
+
+  const xFor = (index: number) =>
+    padding.left + (history.length === 1 ? plotWidth / 2 : (index / (history.length - 1)) * plotWidth);
+  const yFor = (value: number) => padding.top + plotHeight - (value / maxValue) * plotHeight;
+  const lineFor = (key: "disponible" | "inventario") =>
+    history.map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yFor(point[key])}`).join(" ");
+
+  return (
+    <div className="card history-card">
+      <div className="section-title">
+        <div>
+          <h3>Histórico de inventario</h3>
+          <p className="section-note">Totales por fecha del inventario filtrado.</p>
+        </div>
+        <div className={`trend ${change < 0 ? "down" : "up"}`}>
+          <LineChart size={16} />
+          {change === 0 ? "Sin variación" : `${change > 0 ? "+" : ""}${format(change)} t`}
+        </div>
+      </div>
+      <div className="chart-wrap" aria-label="Grafico historico de inventario">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img">
+          {yTicks.map((tick) => (
+            <g key={tick}>
+              <line x1={padding.left} x2={width - padding.right} y1={yFor(tick)} y2={yFor(tick)} className="gridline" />
+              <text x={padding.left - 10} y={yFor(tick) + 4} textAnchor="end">
+                {format(tick)}
+              </text>
+            </g>
+          ))}
+          <path d={lineFor("inventario")} className="chart-line inventory-line" />
+          <path d={lineFor("disponible")} className="chart-line available-line" />
+          {history.map((point, index) => (
+            <g key={point.date}>
+              <circle cx={xFor(index)} cy={yFor(point.inventario)} r="4" className="inventory-dot" />
+              <circle cx={xFor(index)} cy={yFor(point.disponible)} r="4" className="available-dot" />
+              {(index === 0 || index === history.length - 1 || history.length <= 4) && (
+                <text x={xFor(index)} y={height - 10} textAnchor="middle">
+                  {shortDate(point.date)}
+                </text>
+              )}
+            </g>
+          ))}
+        </svg>
+      </div>
+      <div className="legend">
+        <span><i className="legend-dot available" />Disponible</span>
+        <span><i className="legend-dot inventory" />Inventario bruto</span>
+        <span>Último disponible: <strong>{latest ? `${format(latest.disponible)} t` : "0 t"}</strong></span>
+      </div>
+    </div>
   );
 }
 
@@ -419,7 +511,7 @@ function InventoryTable({ rows, compact = false }: { rows: InventoryRow[]; compa
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={`${row.nombre}-${row.tanque}-${row.producto}`}>
+            <tr key={`${row.fecha}-${row.nombre}-${row.tanque}-${row.producto}`}>
               <td>{row.tipo}</td>
               <td>{row.nombre}</td>
               <td>{row.producto}</td>
@@ -496,6 +588,51 @@ function viewSubtitle(view: View) {
 
 function format(value: number) {
   return Math.round(value).toLocaleString("es-EC");
+}
+
+function buildInventoryHistory(rows: InventoryRow[]) {
+  const grouped = new Map<string, { date: string; disponible: number; inventario: number; capacidad: number }>();
+
+  rows.forEach((row) => {
+    const date = normalizeDate(row.fecha) || "Sin fecha";
+    const current = grouped.get(date) ?? { date, disponible: 0, inventario: 0, capacidad: 0 };
+    current.disponible += row.disponible;
+    current.inventario += row.inventario;
+    current.capacidad += row.capacidad;
+    grouped.set(date, current);
+  });
+
+  return Array.from(grouped.values()).sort((a, b) => comparableDate(a.date) - comparableDate(b.date));
+}
+
+function getLatestInventoryRows(rows: InventoryRow[]) {
+  const latestDate = rows.reduce((latest, row) => {
+    const current = comparableDate(normalizeDate(row.fecha));
+    return current > latest ? current : latest;
+  }, 0);
+
+  if (!latestDate) return rows;
+
+  return rows.filter((row) => comparableDate(normalizeDate(row.fecha)) === latestDate);
+}
+
+function normalizeDate(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return trimmed;
+}
+
+function comparableDate(value: string) {
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+}
+
+function shortDate(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "short" });
 }
 
 function sum(values: number[]) {
