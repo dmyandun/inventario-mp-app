@@ -26,6 +26,7 @@ const refineryName = "DANEC SANGOLQUI";
 
 export default function Home() {
   const [rows, setRows] = useState<InventoryRow[]>(sampleInventory);
+  const [dataSource, setDataSource] = useState<"demo" | "excel">("demo");
   const [fleet, setFleet] = useState<FleetInput>({
     unidades: 12,
     toneladasPorUnidad: 28,
@@ -56,6 +57,7 @@ export default function Home() {
     if (!file) return;
     const parsed = await parseInventoryWorkbook(file);
     setRows(parsed);
+    setDataSource("excel");
   }
 
   async function askAi(customQuestion = question) {
@@ -175,6 +177,7 @@ export default function Home() {
             setFleet={setFleet}
             recommendations={recommendations}
             history={inventoryHistory}
+            dataSource={dataSource}
           />
         )}
 
@@ -221,7 +224,8 @@ function InventoryView({
   fleet,
   setFleet,
   recommendations,
-  history
+  history,
+  dataSource
 }: {
   rows: InventoryRow[];
   products: string[];
@@ -231,11 +235,12 @@ function InventoryView({
   setFleet: (value: FleetInput) => void;
   recommendations: ReturnType<typeof buildRecommendations>;
   history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
+  dataSource: "demo" | "excel";
 }) {
   return (
     <section className="grid content-grid">
       <div className="grid">
-        <InventoryHistoryChart history={history} />
+        <InventoryHistoryChart history={history} dataSource={dataSource} />
         <div className="card">
           <div className="section-title">
             <h3>Inventario por tanque</h3>
@@ -272,10 +277,14 @@ function InventoryView({
 }
 
 function InventoryHistoryChart({
-  history
+  history,
+  dataSource
 }: {
   history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
+  dataSource: "demo" | "excel";
 }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
   if (history.length === 0) {
     return (
       <div className="card history-card">
@@ -300,12 +309,20 @@ function InventoryHistoryChart({
   const latest = history[history.length - 1];
   const first = history[0];
   const change = latest && first ? latest.disponible - first.disponible : 0;
+  const hoveredPoint = hoveredIndex === null ? null : history[hoveredIndex];
 
   const xFor = (index: number) =>
     padding.left + (history.length === 1 ? plotWidth / 2 : (index / (history.length - 1)) * plotWidth);
   const yFor = (value: number) => padding.top + plotHeight - (value / maxValue) * plotHeight;
   const lineFor = (key: "disponible" | "inventario") =>
     history.map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yFor(point[key])}`).join(" ");
+  const tooltipWidth = 188;
+  const tooltipHeight = 104;
+  const tooltipX = hoveredIndex === null ? 0 : Math.min(width - tooltipWidth - 10, Math.max(10, xFor(hoveredIndex) - tooltipWidth / 2));
+  const tooltipY =
+    hoveredIndex === null
+      ? 0
+      : Math.max(10, Math.min(height - tooltipHeight - 10, yFor(history[hoveredIndex].disponible) - tooltipHeight - 12));
 
   return (
     <div className="card history-card">
@@ -314,12 +331,17 @@ function InventoryHistoryChart({
           <h3>Histórico de inventario</h3>
           <p className="section-note">Totales por fecha del inventario filtrado.</p>
         </div>
-        <div className={`trend ${change < 0 ? "down" : "up"}`}>
-          <LineChart size={16} />
-          {change === 0 ? "Sin variación" : `${change > 0 ? "+" : ""}${format(change)} t`}
+        <div className="history-actions">
+          <span className={`source-badge ${dataSource === "excel" ? "live" : ""}`}>
+            {dataSource === "excel" ? "Excel cargado" : "Datos demo"}
+          </span>
+          <div className={`trend ${change < 0 ? "down" : "up"}`}>
+            <LineChart size={16} />
+            {change === 0 ? "Sin variación" : `${change > 0 ? "+" : ""}${format(change)} t`}
+          </div>
         </div>
       </div>
-      <div className="chart-wrap" aria-label="Grafico historico de inventario">
+      <div className="chart-wrap" aria-label="Grafico historico de inventario" onMouseLeave={() => setHoveredIndex(null)}>
         <svg viewBox={`0 0 ${width} ${height}`} role="img">
           {yTicks.map((tick) => (
             <g key={tick}>
@@ -332,9 +354,22 @@ function InventoryHistoryChart({
           <path d={lineFor("inventario")} className="chart-line inventory-line" />
           <path d={lineFor("disponible")} className="chart-line available-line" />
           {history.map((point, index) => (
-            <g key={point.date}>
-              <circle cx={xFor(index)} cy={yFor(point.inventario)} r="4" className="inventory-dot" />
-              <circle cx={xFor(index)} cy={yFor(point.disponible)} r="4" className="available-dot" />
+            <g
+              key={point.date}
+              className="chart-hit-group"
+              onMouseEnter={() => setHoveredIndex(index)}
+              onFocus={() => setHoveredIndex(index)}
+              tabIndex={0}
+            >
+              <rect
+                x={xFor(index) - Math.max(18, plotWidth / Math.max(history.length, 1) / 2)}
+                y={padding.top}
+                width={Math.max(36, plotWidth / Math.max(history.length, 1))}
+                height={plotHeight}
+                className="chart-hit-area"
+              />
+              <circle cx={xFor(index)} cy={yFor(point.inventario)} r={hoveredIndex === index ? "6" : "4"} className="inventory-dot" />
+              <circle cx={xFor(index)} cy={yFor(point.disponible)} r={hoveredIndex === index ? "6" : "4"} className="available-dot" />
               {(index === 0 || index === history.length - 1 || history.length <= 4) && (
                 <text x={xFor(index)} y={height - 10} textAnchor="middle">
                   {shortDate(point.date)}
@@ -342,6 +377,25 @@ function InventoryHistoryChart({
               )}
             </g>
           ))}
+          {hoveredIndex !== null && hoveredPoint && (
+            <g className="chart-tooltip">
+              <line
+                x1={xFor(hoveredIndex)}
+                x2={xFor(hoveredIndex)}
+                y1={padding.top}
+                y2={padding.top + plotHeight}
+                className="hover-line"
+              />
+              <rect x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="8" />
+              <text x={tooltipX + 12} y={tooltipY + 22} className="tooltip-title">
+                {longDate(hoveredPoint.date)}
+              </text>
+              <text x={tooltipX + 12} y={tooltipY + 44}>Disponible: {format(hoveredPoint.disponible)} t</text>
+              <text x={tooltipX + 12} y={tooltipY + 62}>Inventario: {format(hoveredPoint.inventario)} t</text>
+              <text x={tooltipX + 12} y={tooltipY + 80}>Capacidad: {format(hoveredPoint.capacidad)} t</text>
+              <text x={tooltipX + 12} y={tooltipY + 98}>Ocupación: {occupancyRate(hoveredPoint).toFixed(1)}%</text>
+            </g>
+          )}
         </svg>
       </div>
       <div className="legend">
@@ -633,6 +687,16 @@ function shortDate(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "short" });
+}
+
+function longDate(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "long", year: "numeric" });
+}
+
+function occupancyRate(point: { disponible: number; capacidad: number }) {
+  return point.capacidad > 0 ? (point.disponible / point.capacidad) * 100 : 0;
 }
 
 function sum(values: number[]) {
