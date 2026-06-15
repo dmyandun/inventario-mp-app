@@ -7,6 +7,7 @@ import {
   Factory,
   FileSpreadsheet,
   Gauge,
+  LayoutGrid,
   LineChart,
   PackageCheck,
   Route,
@@ -14,7 +15,7 @@ import {
   Truck
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { parseInventoryWorkbook } from "@/lib/excel";
 import { buildRecommendations, getKpis } from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
@@ -42,6 +43,7 @@ export default function Home() {
   const productRows = product === "TODOS" ? rows : rows.filter((row) => row.producto === product);
   const currentRows = getLatestInventoryRows(productRows);
   const inventoryHistory = buildInventoryHistory(productRows);
+  const locationHeatmap = buildLocationHeatmap(productRows);
   const refineryRows = currentRows.filter((row) => normalize(row.nombre) === normalize(refineryName));
   const originRows = currentRows.filter((row) => normalize(row.nombre) !== normalize(refineryName));
   const kpis = getKpis(currentRows);
@@ -177,6 +179,7 @@ export default function Home() {
             setFleet={setFleet}
             recommendations={recommendations}
             history={inventoryHistory}
+            heatmap={locationHeatmap}
             dataSource={dataSource}
           />
         )}
@@ -225,6 +228,7 @@ function InventoryView({
   setFleet,
   recommendations,
   history,
+  heatmap,
   dataSource
 }: {
   rows: InventoryRow[];
@@ -235,12 +239,14 @@ function InventoryView({
   setFleet: (value: FleetInput) => void;
   recommendations: ReturnType<typeof buildRecommendations>;
   history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
+  heatmap: ReturnType<typeof buildLocationHeatmap>;
   dataSource: "demo" | "excel";
 }) {
   return (
     <section className="grid content-grid">
       <div className="grid">
         <InventoryHistoryChart history={history} dataSource={dataSource} />
+        <LocationHeatmap heatmap={heatmap} />
         <div className="card">
           <div className="section-title">
             <h3>Inventario por tanque</h3>
@@ -403,6 +409,64 @@ function InventoryHistoryChart({
         <span><i className="legend-dot inventory" />Inventario bruto</span>
         <span>Último disponible: <strong>{latest ? `${format(latest.disponible)} t` : "0 t"}</strong></span>
       </div>
+    </div>
+  );
+}
+
+function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocationHeatmap> }) {
+  const { dates, locations } = heatmap;
+
+  return (
+    <div className="card heatmap-card">
+      <div className="section-title">
+        <div>
+          <h3>Ocupación por ubicación</h3>
+          <p className="section-note">Mismo eje de tiempo del histórico, desglosado por ubicación (disponible ÷ capacidad).</p>
+        </div>
+        <div className="heat-scale" aria-hidden="true">
+          <span>0%</span>
+          <i className="heat-scale-bar" />
+          <span>100%</span>
+        </div>
+      </div>
+      {dates.length === 0 || locations.length === 0 ? (
+        <div className="empty-state">Carga un Excel con fechas para ver la ocupación por ubicación.</div>
+      ) : (
+        <div className="heatmap-wrap">
+          <div
+            className="heatmap-grid"
+            style={{ gridTemplateColumns: `minmax(120px, 1.3fr) repeat(${dates.length}, minmax(48px, 1fr))` }}
+          >
+            <div className="heat-corner" />
+            {dates.map((date) => (
+              <div key={date} className="heat-col-label" title={longDate(date)}>
+                {shortDate(date)}
+              </div>
+            ))}
+            {locations.map((location) => (
+              <Fragment key={location.nombre}>
+                <div className="heat-row-label" title={location.nombre}>
+                  {location.nombre}
+                </div>
+                {location.cells.map((cell) => (
+                  <div
+                    key={`${location.nombre}-${cell.date}`}
+                    className={`heat-cell ${cell.occupancy === null ? "empty" : ""}`}
+                    style={cell.occupancy === null ? undefined : { background: heatColor(cell.occupancy) }}
+                    title={
+                      cell.occupancy === null
+                        ? `${location.nombre} · ${longDate(cell.date)}: sin dato`
+                        : `${location.nombre} · ${longDate(cell.date)}\nOcupación ${(cell.occupancy * 100).toFixed(1)}%\nDisponible ${format(cell.disponible)} t / Capacidad ${format(cell.capacidad)} t`
+                    }
+                  >
+                    {cell.occupancy === null ? "–" : `${Math.round(cell.occupancy * 100)}%`}
+                  </div>
+                ))}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -657,6 +721,66 @@ function buildInventoryHistory(rows: InventoryRow[]) {
   });
 
   return Array.from(grouped.values()).sort((a, b) => comparableDate(a.date) - comparableDate(b.date));
+}
+
+function buildLocationHeatmap(rows: InventoryRow[]) {
+  const dateOrder = new Map<string, number>();
+  const byLocation = new Map<string, Map<string, { disponible: number; capacidad: number }>>();
+
+  rows.forEach((row) => {
+    const date = normalizeDate(row.fecha) || "Sin fecha";
+    dateOrder.set(date, comparableDate(date));
+    const series = byLocation.get(row.nombre) ?? new Map();
+    const cell = series.get(date) ?? { disponible: 0, capacidad: 0 };
+    cell.disponible += row.disponible;
+    cell.capacidad += row.capacidad;
+    series.set(date, cell);
+    byLocation.set(row.nombre, series);
+  });
+
+  const dates = Array.from(dateOrder.keys()).sort((a, b) => (dateOrder.get(a) ?? 0) - (dateOrder.get(b) ?? 0));
+
+  const locations = Array.from(byLocation.entries())
+    .map(([nombre, series]) => ({
+      nombre,
+      cells: dates.map((date) => {
+        const cell = series.get(date);
+        const occupancy = cell && cell.capacidad > 0 ? cell.disponible / cell.capacidad : null;
+        return { date, occupancy, disponible: cell?.disponible ?? 0, capacidad: cell?.capacidad ?? 0 };
+      })
+    }))
+    .sort((a, b) => {
+      const aRefinery = normalize(a.nombre) === normalize(refineryName);
+      const bRefinery = normalize(b.nombre) === normalize(refineryName);
+      if (aRefinery !== bRefinery) return aRefinery ? -1 : 1;
+      return a.nombre.localeCompare(b.nombre, "es");
+    });
+
+  return { dates, locations };
+}
+
+function heatColor(occupancy: number) {
+  const t = Math.max(0, Math.min(1, occupancy));
+  const stops: Array<{ p: number; c: [number, number, number] }> = [
+    { p: 0, c: [233, 240, 225] },
+    { p: 0.6, c: [244, 215, 154] },
+    { p: 1, c: [217, 139, 128] }
+  ];
+
+  let lower = stops[0];
+  let upper = stops[stops.length - 1];
+  for (let index = 0; index < stops.length - 1; index += 1) {
+    if (t >= stops[index].p && t <= stops[index + 1].p) {
+      lower = stops[index];
+      upper = stops[index + 1];
+      break;
+    }
+  }
+
+  const span = upper.p - lower.p || 1;
+  const ratio = (t - lower.p) / span;
+  const channel = (index: number) => Math.round(lower.c[index] + (upper.c[index] - lower.c[index]) * ratio);
+  return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
 }
 
 function getLatestInventoryRows(rows: InventoryRow[]) {

@@ -386,6 +386,91 @@ button {
   background: var(--blue);
 }
 
+.heatmap-card {
+  min-width: 0;
+}
+
+.heat-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.heat-scale-bar {
+  width: 84px;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(233, 240, 225), rgb(244, 215, 154), rgb(217, 139, 128));
+}
+
+.heatmap-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcf8;
+  padding: 10px;
+}
+
+.heatmap-grid {
+  display: grid;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.heat-corner {
+  position: sticky;
+  left: 0;
+  background: #fbfcf8;
+  z-index: 1;
+}
+
+.heat-col-label {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding-bottom: 4px;
+}
+
+.heat-row-label {
+  position: sticky;
+  left: 0;
+  background: #fbfcf8;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #344036;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.heat-cell {
+  min-height: 38px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #2c352d;
+  cursor: default;
+}
+
+.heat-cell.empty {
+  background: #eef1ea;
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .empty-state {
   min-height: 180px;
   display: grid;
