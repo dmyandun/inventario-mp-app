@@ -198,11 +198,8 @@ button {
   align-items: start;
 }
 
-.content-grid > .grid {
-  min-width: 0;
-}
-
-.content-grid > .card {
+.content-grid .grid,
+.content-grid .card {
   min-width: 0;
 }
 
