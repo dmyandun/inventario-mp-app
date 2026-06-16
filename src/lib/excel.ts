@@ -13,7 +13,9 @@ export async function parseInventoryWorkbook(file: File): Promise<InventoryRow[]
   }
 
   const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-  return rawRows.map(mapRow).filter((row) => row.nombre && row.producto && row.tanque);
+  // No se exige tanque: TIPOs de suministro (PROVEEDORES, TRANSITO, IMPORTACIONES)
+  // no son tanques fisicos y no tienen esa columna, pero deben mostrarse.
+  return rawRows.map(mapRow).filter((row) => row.nombre && row.producto);
 }
 
 function mapRow(row: Record<string, unknown>): InventoryRow {

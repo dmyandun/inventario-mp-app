@@ -893,20 +893,22 @@ function heatTextColor(occupancy: number) {
 }
 
 function getLatestInventoryRows(rows: InventoryRow[]) {
-  // Toma el ultimo registro por ubicacion+tanque (no por la fecha global),
-  // porque distintas ubicaciones se actualizan en fechas distintas.
-  const latestByKey = new Map<string, { row: InventoryRow; ts: number }>();
+  // Cada ubicacion/entidad (nombre) se actualiza en fechas distintas: la
+  // refineria llega a una fecha mas nueva que extractoras o proveedores.
+  // Por eso se toma la fecha mas reciente DE CADA ubicacion y se conservan
+  // TODAS sus filas de ese dia: todos los tanques de un sitio y todos los
+  // lotes de un proveedor (que puede tener varios el mismo dia).
+  const latestTsByName = new Map<string, number>();
 
   for (const row of rows) {
-    const key = `${row.nombre}|${row.producto}|${row.tanque}`;
     const ts = rowTimestamp(row.fecha);
-    const existing = latestByKey.get(key);
-    if (!existing || ts >= existing.ts) {
-      latestByKey.set(key, { row, ts });
+    const current = latestTsByName.get(row.nombre);
+    if (current === undefined || ts > current) {
+      latestTsByName.set(row.nombre, ts);
     }
   }
 
-  return Array.from(latestByKey.values()).map((entry) => entry.row);
+  return rows.filter((row) => rowTimestamp(row.fecha) === latestTsByName.get(row.nombre));
 }
 
 function rowTimestamp(value: string) {
