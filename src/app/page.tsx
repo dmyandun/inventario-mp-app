@@ -206,25 +206,17 @@ export default function Home() {
         </section>
 
         {view === "inventario" && (
-          <>
-            <InventoryView
-              rows={currentRows}
-              products={products}
-              product={product}
-              setProduct={setProduct}
-              fleet={fleet}
-              setFleet={setFleet}
-              history={inventoryHistory}
-              heatmap={locationHeatmap}
-              dataSource={dataSource}
-            />
-            <FloatingPriorities
-              recommendations={recommendations}
-              aiText={priorityAi}
-              loading={loadingPriorityAi}
-              dataSource={dataSource}
-            />
-          </>
+          <InventoryView
+            rows={currentRows}
+            products={products}
+            product={product}
+            setProduct={setProduct}
+            fleet={fleet}
+            setFleet={setFleet}
+            history={inventoryHistory}
+            heatmap={locationHeatmap}
+            dataSource={dataSource}
+          />
         )}
 
         {view === "refineria" && (
@@ -234,14 +226,12 @@ export default function Home() {
             refineryKpis={refineryKpis}
             refineryOpenDemand={refineryOpenDemand}
             dailyFleetCapacity={dailyFleetCapacity}
-            recommendations={recommendations}
             askAi={askAi}
           />
         )}
 
         {view === "rutas" && (
           <RoutesView
-            recommendations={recommendations}
             dailyFleetCapacity={dailyFleetCapacity}
             askAi={askAi}
           />
@@ -255,6 +245,15 @@ export default function Home() {
             loadingAi={loadingAi}
             answer={answer}
             recommendations={recommendations}
+          />
+        )}
+
+        {view !== "ia" && (
+          <FloatingPriorities
+            recommendations={recommendations}
+            aiText={priorityAi}
+            loading={loadingPriorityAi}
+            dataSource={dataSource}
           />
         )}
       </main>
@@ -284,7 +283,7 @@ function InventoryView({
   dataSource: "demo" | "excel";
 }) {
   return (
-    <section className="grid inventory-stack">
+    <section className="grid content-stack">
       <InventoryHistoryChart history={history} dataSource={dataSource} />
       <LocationHeatmap heatmap={heatmap} />
       <div className="card">
@@ -519,7 +518,6 @@ function RefineryView({
   refineryKpis,
   refineryOpenDemand,
   dailyFleetCapacity,
-  recommendations,
   askAi
 }: {
   refineryRows: InventoryRow[];
@@ -527,7 +525,6 @@ function RefineryView({
   refineryKpis: ReturnType<typeof getKpis>;
   refineryOpenDemand: number;
   dailyFleetCapacity: number;
-  recommendations: ReturnType<typeof buildRecommendations>;
   askAi: (question: string) => void;
 }) {
   const coverageDays = dailyFleetCapacity > 0 ? refineryKpis.totalNetInventory / dailyFleetCapacity : 0;
@@ -547,28 +544,23 @@ function RefineryView({
         </div>
         <InventoryTable rows={refineryRows} />
       </div>
-      <div className="grid">
-        <div className="card">
-          <div className="section-title"><h3>Orígenes disponibles</h3></div>
-          <InventoryTable rows={originRows.slice(0, 8)} compact />
-        </div>
-        <RecommendationsPanel recommendations={recommendations.slice(0, 4)} />
+      <div className="card">
+        <div className="section-title"><h3>Orígenes disponibles</h3></div>
+        <InventoryTable rows={originRows.slice(0, 8)} compact />
       </div>
     </section>
   );
 }
 
 function RoutesView({
-  recommendations,
   dailyFleetCapacity,
   askAi
 }: {
-  recommendations: ReturnType<typeof buildRecommendations>;
   dailyFleetCapacity: number;
   askAi: (question: string) => void;
 }) {
   return (
-    <section className="grid content-grid">
+    <section className="grid content-stack">
       <div className="card">
         <div className="section-title">
           <h3>Matriz de rutas</h3>
@@ -603,7 +595,6 @@ function RoutesView({
           </table>
         </div>
       </div>
-      <RecommendationsPanel recommendations={recommendations} />
     </section>
   );
 }
