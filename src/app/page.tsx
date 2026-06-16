@@ -893,14 +893,25 @@ function heatTextColor(occupancy: number) {
 }
 
 function getLatestInventoryRows(rows: InventoryRow[]) {
-  const latestDate = rows.reduce((latest, row) => {
-    const current = comparableDate(normalizeDate(row.fecha));
-    return current > latest ? current : latest;
-  }, 0);
+  // Toma el ultimo registro por ubicacion+tanque (no por la fecha global),
+  // porque distintas ubicaciones se actualizan en fechas distintas.
+  const latestByKey = new Map<string, { row: InventoryRow; ts: number }>();
 
-  if (!latestDate) return rows;
+  for (const row of rows) {
+    const key = `${row.nombre}|${row.producto}|${row.tanque}`;
+    const ts = rowTimestamp(row.fecha);
+    const existing = latestByKey.get(key);
+    if (!existing || ts >= existing.ts) {
+      latestByKey.set(key, { row, ts });
+    }
+  }
 
-  return rows.filter((row) => comparableDate(normalizeDate(row.fecha)) === latestDate);
+  return Array.from(latestByKey.values()).map((entry) => entry.row);
+}
+
+function rowTimestamp(value: string) {
+  const parsed = new Date(normalizeDate(value)).getTime();
+  return Number.isNaN(parsed) ? -1 : parsed;
 }
 
 function normalizeDate(value: string) {
