@@ -452,7 +452,11 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
                   <div
                     key={`${location.nombre}-${cell.date}`}
                     className={`heat-cell ${cell.occupancy === null ? "empty" : ""}`}
-                    style={cell.occupancy === null ? undefined : { background: heatColor(cell.occupancy) }}
+                    style={
+                      cell.occupancy === null
+                        ? undefined
+                        : { background: heatColor(cell.occupancy), color: heatTextColor(cell.occupancy) }
+                    }
                     title={
                       cell.occupancy === null
                         ? `${location.nombre} · ${longDate(cell.date)}: sin dato`
@@ -762,9 +766,9 @@ function buildLocationHeatmap(rows: InventoryRow[]) {
 function heatColor(occupancy: number) {
   const t = Math.max(0, Math.min(1, occupancy));
   const stops: Array<{ p: number; c: [number, number, number] }> = [
-    { p: 0, c: [233, 240, 225] },
-    { p: 0.6, c: [244, 215, 154] },
-    { p: 1, c: [217, 139, 128] }
+    { p: 0, c: [240, 246, 233] },
+    { p: 0.6, c: [125, 179, 91] },
+    { p: 1, c: [63, 125, 69] }
   ];
 
   let lower = stops[0];
@@ -781,6 +785,10 @@ function heatColor(occupancy: number) {
   const ratio = (t - lower.p) / span;
   const channel = (index: number) => Math.round(lower.c[index] + (upper.c[index] - lower.c[index]) * ratio);
   return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
+}
+
+function heatTextColor(occupancy: number) {
+  return occupancy > 0.55 ? "#ffffff" : "#1f2520";
 }
 
 function getLatestInventoryRows(rows: InventoryRow[]) {

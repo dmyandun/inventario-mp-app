@@ -198,6 +198,14 @@ button {
   align-items: start;
 }
 
+.content-grid > .grid {
+  min-width: 0;
+}
+
+.content-grid > .card {
+  min-width: 0;
+}
+
 .section-title {
   display: flex;
   align-items: center;
@@ -404,7 +412,7 @@ button {
   width: 84px;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgb(233, 240, 225), rgb(244, 215, 154), rgb(217, 139, 128));
+  background: linear-gradient(90deg, rgb(240, 246, 233), rgb(125, 179, 91), rgb(63, 125, 69));
 }
 
 .heatmap-wrap {
