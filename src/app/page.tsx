@@ -7,15 +7,16 @@ import {
   Factory,
   FileSpreadsheet,
   Gauge,
-  LayoutGrid,
   LineChart,
   PackageCheck,
   Route,
   Send,
-  Truck
+  Sparkles,
+  Truck,
+  X
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { parseInventoryWorkbook } from "@/lib/excel";
 import { buildRecommendations, getKpis } from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
@@ -38,6 +39,8 @@ export default function Home() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
+  const [priorityAi, setPriorityAi] = useState("");
+  const [loadingPriorityAi, setLoadingPriorityAi] = useState(false);
 
   const products = useMemo(() => ["TODOS", ...Array.from(new Set(rows.map((row) => row.producto)))], [rows]);
   const productRows = product === "TODOS" ? rows : rows.filter((row) => row.producto === product);
@@ -72,7 +75,23 @@ export default function Home() {
     setLoadingAi(true);
     setQuestion(finalQuestion);
     setAnswer("");
-    const context = JSON.stringify(
+
+    try {
+      const response = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: finalQuestion, context: buildAiContext() })
+      });
+      const data = await response.json();
+      setAnswer(data.answer);
+      setView("ia");
+    } finally {
+      setLoadingAi(false);
+    }
+  }
+
+  function buildAiContext() {
+    return JSON.stringify(
       {
         kpis,
         refineryKpis,
@@ -87,20 +106,37 @@ export default function Home() {
       null,
       2
     );
+  }
 
+  async function runPriorityAnalysis() {
+    setLoadingPriorityAi(true);
+    setPriorityAi("");
     try {
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: finalQuestion, context })
+        body: JSON.stringify({
+          question:
+            "Con base en el inventario actual, prioriza los despachos hacia la refineria DANEC SANGOLQUI. Indica prioridad, ubicacion, toneladas sugeridas, motivo y riesgo.",
+          context: buildAiContext()
+        })
       });
       const data = await response.json();
-      setAnswer(data.answer);
-      setView("ia");
+      setPriorityAi(data.answer ?? "");
+    } catch {
+      setPriorityAi("No se pudo completar el analisis de IA.");
     } finally {
-      setLoadingAi(false);
+      setLoadingPriorityAi(false);
     }
   }
+
+  // Al cargar un Excel, dispara automaticamente el analisis de IA de prioridades.
+  useEffect(() => {
+    if (dataSource === "excel") {
+      runPriorityAnalysis();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   async function notifyTelegram() {
     const top = recommendations[0];
@@ -170,18 +206,25 @@ export default function Home() {
         </section>
 
         {view === "inventario" && (
-          <InventoryView
-            rows={currentRows}
-            products={products}
-            product={product}
-            setProduct={setProduct}
-            fleet={fleet}
-            setFleet={setFleet}
-            recommendations={recommendations}
-            history={inventoryHistory}
-            heatmap={locationHeatmap}
-            dataSource={dataSource}
-          />
+          <>
+            <InventoryView
+              rows={currentRows}
+              products={products}
+              product={product}
+              setProduct={setProduct}
+              fleet={fleet}
+              setFleet={setFleet}
+              history={inventoryHistory}
+              heatmap={locationHeatmap}
+              dataSource={dataSource}
+            />
+            <FloatingPriorities
+              recommendations={recommendations}
+              aiText={priorityAi}
+              loading={loadingPriorityAi}
+              dataSource={dataSource}
+            />
+          </>
         )}
 
         {view === "refineria" && (
@@ -226,7 +269,6 @@ function InventoryView({
   setProduct,
   fleet,
   setFleet,
-  recommendations,
   history,
   heatmap,
   dataSource
@@ -237,17 +279,15 @@ function InventoryView({
   setProduct: (value: string) => void;
   fleet: FleetInput;
   setFleet: (value: FleetInput) => void;
-  recommendations: ReturnType<typeof buildRecommendations>;
   history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
   heatmap: ReturnType<typeof buildLocationHeatmap>;
   dataSource: "demo" | "excel";
 }) {
   return (
-    <section className="grid content-grid">
-      <div className="grid">
-        <InventoryHistoryChart history={history} dataSource={dataSource} />
-        <LocationHeatmap heatmap={heatmap} />
-        <div className="card">
+    <section className="grid inventory-stack">
+      <InventoryHistoryChart history={history} dataSource={dataSource} />
+      <LocationHeatmap heatmap={heatmap} />
+      <div className="card">
           <div className="section-title">
             <h3>Inventario por tanque</h3>
             <div className="filters">
@@ -276,8 +316,6 @@ function InventoryView({
           </div>
           <InventoryTable rows={rows} />
         </div>
-      </div>
-      <RecommendationsPanel recommendations={recommendations} />
     </section>
   );
 }
@@ -672,6 +710,78 @@ function RecommendationsPanel({ recommendations }: { recommendations: ReturnType
           </article>
         ))}
       </div>
+    </div>
+  );
+}
+
+function FloatingPriorities({
+  recommendations,
+  aiText,
+  loading,
+  dataSource
+}: {
+  recommendations: ReturnType<typeof buildRecommendations>;
+  aiText: string;
+  loading: boolean;
+  dataSource: "demo" | "excel";
+}) {
+  const [open, setOpen] = useState(false);
+  const highCount = recommendations.filter((item) => item.priority === "alta").length;
+
+  return (
+    <div className="floating-priorities">
+      {open && (
+        <div className="fp-panel" role="dialog" aria-label="Prioridades sugeridas">
+          <div className="fp-header">
+            <div>
+              <h3>Prioridades sugeridas</h3>
+              <span className="fp-sub">Solo lectura · {dataSource === "excel" ? "Excel cargado" : "Datos demo"}</span>
+            </div>
+            <button className="fp-close" onClick={() => setOpen(false)} aria-label="Cerrar">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="fp-body">
+            <div className="recommendations">
+              {recommendations.slice(0, 6).map((item) => (
+                <article className="rec" key={item.id}>
+                  <header>
+                    <h4>{item.title}</h4>
+                    <span className={`pill ${item.priority === "alta" ? "risk" : item.priority === "media" ? "warn" : "ok"}`}>
+                      {item.priority}
+                    </span>
+                  </header>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+            <div className="fp-ai">
+              <div className="fp-ai-title">
+                <Sparkles size={15} /> Análisis IA
+              </div>
+              <div className="fp-ai-body">
+                {loading
+                  ? "Analizando inventario con IA..."
+                  : aiText
+                    ? aiText
+                    : dataSource === "excel"
+                      ? "Sin análisis disponible."
+                      : "Carga un Excel para generar el análisis de IA automáticamente."}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      <button
+        className="fp-fab"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-label="Prioridades sugeridas"
+        title="Prioridades sugeridas"
+      >
+        <Bot size={22} />
+        {highCount > 0 && <span className="fp-badge">{highCount}</span>}
+      </button>
     </div>
   );
 }
