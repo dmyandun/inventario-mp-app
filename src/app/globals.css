@@ -417,7 +417,6 @@ button {
 }
 
 .heatmap-wrap {
-  overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcf8;
@@ -427,7 +426,8 @@ button {
 .heatmap-grid {
   display: grid;
   gap: 4px;
-  min-width: max-content;
+  width: 100%;
+  min-width: 0;
 }
 
 .heat-corner {
@@ -443,8 +443,9 @@ button {
   justify-content: center;
   text-align: center;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   padding-bottom: 4px;
+  overflow: hidden;
 }
 
 .heat-row-label {
@@ -468,10 +469,11 @@ button {
   border-radius: 6px;
   display: grid;
   place-items: center;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: #2c352d;
   cursor: default;
+  overflow: hidden;
 }
 
 .heat-cell.empty {
@@ -489,6 +491,57 @@ button {
   color: var(--muted);
   text-align: center;
   padding: 18px;
+}
+
+.dispatch-table th,
+.dispatch-table td {
+  white-space: nowrap;
+}
+
+.cell-input {
+  width: 100%;
+  min-width: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+}
+
+.cell-input:focus {
+  outline: none;
+  border-color: var(--accent, #4f7a3a);
+  box-shadow: 0 0 0 2px rgba(79, 122, 58, 0.18);
+}
+
+.cell-input--num {
+  min-width: 84px;
+  text-align: right;
+}
+
+.dispatch-send {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.dispatch-email {
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+
+.dispatch-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dispatch-status {
+  margin-top: 10px;
 }
 
 .filters {

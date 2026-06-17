@@ -479,7 +479,7 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
         <div className="heatmap-wrap">
           <div
             className="heatmap-grid"
-            style={{ gridTemplateColumns: `minmax(120px, 1.3fr) repeat(${dates.length}, minmax(48px, 1fr))` }}
+            style={{ gridTemplateColumns: `clamp(72px, 14%, 120px) repeat(${dates.length}, minmax(0, 1fr))` }}
           >
             <div className="heat-corner" />
             {dates.map((date) => (
@@ -599,6 +599,18 @@ function RoutesView({
   );
 }
 
+type DispatchFields = {
+  chofer: string;
+  placas: string;
+  toneladas: string;
+  partida: string;
+  destino: string;
+};
+
+function stopKey(stop: DistributionPlan["stops"][number], index: number) {
+  return `${stop.origen}-${stop.tanque}-${stop.producto}-${index}`;
+}
+
 function DistributionPlanCard({
   plan,
   fleet,
@@ -608,6 +620,117 @@ function DistributionPlanCard({
   fleet: FleetInput;
   askAi: (question: string) => void;
 }) {
+  const [edits, setEdits] = useState<Record<string, DispatchFields>>({});
+  const [emailTo, setEmailTo] = useState("");
+  const [sending, setSending] = useState<"telegram" | "email" | null>(null);
+  const [status, setStatus] = useState("");
+
+  function fieldsFor(stop: DistributionPlan["stops"][number], index: number): DispatchFields {
+    const key = stopKey(stop, index);
+    return (
+      edits[key] ?? {
+        chofer: "",
+        placas: "",
+        toneladas: String(stop.toneladas),
+        partida: stop.origen,
+        destino: refineryName
+      }
+    );
+  }
+
+  function update(key: string, base: DispatchFields, field: keyof DispatchFields, value: string) {
+    setEdits((prev) => ({ ...prev, [key]: { ...base, [field]: value } }));
+  }
+
+  const orders = plan.stops.map((stop, index) => {
+    const fields = fieldsFor(stop, index);
+    return { stop, fields };
+  });
+
+  const fechaTexto = new Date().toLocaleDateString("es-EC", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+
+  function buildText() {
+    const lines = orders.map(({ stop, fields }, index) => {
+      return [
+        `<b>${index + 1}. ${fields.partida || stop.origen} → ${fields.destino || refineryName}</b>`,
+        `Producto: ${stop.producto} · ${fields.toneladas || "0"} t`,
+        `Chofer: ${fields.chofer || "—"} · Placas: ${fields.placas || "—"}`
+      ].join("\n");
+    });
+    return `<b>🚚 ORDEN DE DESPACHO – ${fechaTexto}</b>\n\n${lines.join("\n\n")}`;
+  }
+
+  function buildHtml() {
+    const rowsHtml = orders
+      .map(
+        ({ stop, fields }, index) => `
+        <tr>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${index + 1}</td>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.partida || stop.origen}</td>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.destino || refineryName}</td>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${stop.producto}</td>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;text-align:right;">${fields.toneladas || "0"} t</td>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.chofer || "—"}</td>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.placas || "—"}</td>
+        </tr>`
+      )
+      .join("");
+    return `
+      <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2a20;">
+        <h2 style="margin:0 0 12px;">🚚 Orden de despacho – ${fechaTexto}</h2>
+        <table style="border-collapse:collapse;font-size:14px;">
+          <thead>
+            <tr style="background:#eef3e9;">
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">#</th>
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Partida</th>
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Destino</th>
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Producto</th>
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Toneladas</th>
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Chofer</th>
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Placas</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`;
+  }
+
+  async function send(channel: "telegram" | "email") {
+    if (orders.length === 0) return;
+    setSending(channel);
+    setStatus("Enviando…");
+    try {
+      const endpoint = channel === "telegram" ? "/api/telegram" : "/api/email";
+      const payload =
+        channel === "telegram"
+          ? { text: buildText() }
+          : {
+              subject: `Orden de despacho – ${fechaTexto}`,
+              html: buildHtml(),
+              to: emailTo.trim()
+            };
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (data.ok) {
+        setStatus(channel === "telegram" ? "Orden enviada por Telegram." : "Orden enviada por correo.");
+      } else {
+        setStatus(data.message ?? "No se pudo enviar la orden.");
+      }
+    } catch {
+      setStatus("Error de red al enviar la orden.");
+    } finally {
+      setSending(null);
+    }
+  }
+
   return (
     <div className="card">
       <div className="section-title">
@@ -615,8 +738,8 @@ function DistributionPlanCard({
           <h3>Plan de distribución diario</h3>
           <p className="section-note">
             Flota: {format(fleet.unidades)} camiones · {format(plan.capacidadDiaria)} t/día · asignadas{" "}
-            {format(plan.toneladasTotales)} t en {format(plan.camionesUsados)} camiones. Prioriza ubicaciones
-            copadas y de mayor acidez.
+            {format(plan.toneladasTotales)} t en {format(plan.camionesUsados)} camiones. Completa chofer, placas y
+            destino y envía la orden.
           </p>
         </div>
         <button className="btn" onClick={() => askAi("Revisa el plan de distribucion diario y sugiere ajustes por ocupacion, acidez y flota.")}>
@@ -626,42 +749,104 @@ function DistributionPlanCard({
       {plan.stops.length === 0 ? (
         <div className="empty-state">No hay orígenes con inventario disponible para despachar.</div>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Origen</th>
-                <th>Producto</th>
-                <th>Ocupación</th>
-                <th>Acidez</th>
-                <th>Toneladas</th>
-                <th>Camiones</th>
-                <th>Viajes/camión</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plan.stops.map((stop, index) => (
-                <tr key={`${stop.origen}-${stop.tanque}-${stop.producto}-${index}`}>
-                  <td>{stop.origen}</td>
-                  <td>{stop.producto}</td>
-                  <td>{(stop.occupancy * 100).toFixed(1)}%</td>
-                  <td>{stop.acidez.toFixed(1)}</td>
-                  <td>{format(stop.toneladas)} t</td>
-                  <td>{format(stop.camiones)}</td>
-                  <td>{format(stop.viajesPorCamion)}</td>
+        <>
+          <div className="table-wrap">
+            <table className="dispatch-table">
+              <thead>
+                <tr>
+                  <th>Partida</th>
+                  <th>Producto</th>
+                  <th>Ocup.</th>
+                  <th>Acidez</th>
+                  <th>Camiones</th>
+                  <th>Toneladas</th>
+                  <th>Chofer</th>
+                  <th>Placas del tanque</th>
+                  <th>Destino</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={4}>Total</td>
-                <td>{format(plan.toneladasTotales)} t</td>
-                <td>{format(plan.camionesUsados)}</td>
-                <td>{format(plan.viajesTotales)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {plan.stops.map((stop, index) => {
+                  const key = stopKey(stop, index);
+                  const fields = fieldsFor(stop, index);
+                  return (
+                    <tr key={key}>
+                      <td>
+                        <input
+                          className="cell-input"
+                          value={fields.partida}
+                          onChange={(event) => update(key, fields, "partida", event.target.value)}
+                        />
+                      </td>
+                      <td>{stop.producto}</td>
+                      <td>{(stop.occupancy * 100).toFixed(1)}%</td>
+                      <td>{stop.acidez.toFixed(1)}</td>
+                      <td>{format(stop.camiones)}</td>
+                      <td>
+                        <input
+                          className="cell-input cell-input--num"
+                          type="number"
+                          min={0}
+                          value={fields.toneladas}
+                          onChange={(event) => update(key, fields, "toneladas", event.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="cell-input"
+                          placeholder="Nombre del chofer"
+                          value={fields.chofer}
+                          onChange={(event) => update(key, fields, "chofer", event.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="cell-input"
+                          placeholder="ABC-1234"
+                          value={fields.placas}
+                          onChange={(event) => update(key, fields, "placas", event.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="cell-input"
+                          value={fields.destino}
+                          onChange={(event) => update(key, fields, "destino", event.target.value)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={4}>Total</td>
+                  <td>{format(plan.camionesUsados)}</td>
+                  <td>{format(plan.toneladasTotales)} t</td>
+                  <td colSpan={3} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div className="dispatch-send">
+            <input
+              className="cell-input dispatch-email"
+              type="email"
+              placeholder="Correo destino (opcional si ya está configurado)"
+              value={emailTo}
+              onChange={(event) => setEmailTo(event.target.value)}
+            />
+            <div className="dispatch-actions">
+              <button className="btn" onClick={() => send("telegram")} disabled={sending !== null}>
+                <Send size={16} /> {sending === "telegram" ? "Enviando…" : "Enviar por Telegram"}
+              </button>
+              <button className="btn primary" onClick={() => send("email")} disabled={sending !== null}>
+                <Send size={16} /> {sending === "email" ? "Enviando…" : "Enviar por correo"}
+              </button>
+            </div>
+          </div>
+          {status && <p className="section-note dispatch-status">{status}</p>}
+        </>
       )}
     </div>
   );

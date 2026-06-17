@@ -21,7 +21,7 @@ const latestSampleInventory: InventoryRow[] = [
   },
   {
     fecha: "2026-05-29",
-    tipo: "BODEGA",
+    tipo: "EXTRACTORA",
     nombre: "QUEVEDO",
     producto: "ACEITE CRUDO PALMA",
     tanque: "TK-Q02",
@@ -39,7 +39,7 @@ const latestSampleInventory: InventoryRow[] = [
   },
   {
     fecha: "2026-05-29",
-    tipo: "BODEGA",
+    tipo: "EXTRACTORA",
     nombre: "MANTA",
     producto: "ACEITE CRUDO SOYA",
     tanque: "TK-M01",
@@ -57,7 +57,7 @@ const latestSampleInventory: InventoryRow[] = [
   },
   {
     fecha: "2026-05-29",
-    tipo: "BODEGA",
+    tipo: "EXTRACTORA",
     nombre: "GUAYAQUIL",
     producto: "ACEITE CRUDO PALMA",
     tanque: "TK-G07",
@@ -75,7 +75,7 @@ const latestSampleInventory: InventoryRow[] = [
   },
   {
     fecha: "2026-05-29",
-    tipo: "BODEGA",
+    tipo: "EXTRACTORA",
     nombre: "SANTO DOMINGO",
     producto: "ACEITE CRUDO PALMA",
     tanque: "TK-S04",
