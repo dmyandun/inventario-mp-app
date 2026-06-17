@@ -201,17 +201,16 @@ export default function Home() {
         </section>
 
         {view === "refineria" ? (
-          <section className="grid kpis">
+          <section className="grid kpis kpis--three">
             <Kpi icon={<PackageCheck size={19} />} label="Inventario neto refinería" value={`${format(refineryKpis.totalNetInventory)} t`} />
             <Kpi icon={<Gauge size={19} />} label="Ocupación de la refinería" value={`${(refineryKpis.occupancy * 100).toFixed(1)}%`} />
             <Kpi icon={<Truck size={19} />} label="Toneladas en tránsito" value={`${format(refineryTransito)} t`} />
-            <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={refineryKpis.weightedAcidity.toFixed(2)} />
           </section>
         ) : (
           <section className="grid kpis">
             <Kpi icon={<PackageCheck size={19} />} label="Inventario neto" value={`${format(kpis.totalNetInventory)} t`} />
             <Kpi icon={<Gauge size={19} />} label="Ocupación nacional" value={`${(kpis.occupancy * 100).toFixed(1)}%`} />
-            <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={kpis.weightedAcidity.toFixed(2)} />
+            <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={`${kpis.weightedAcidity.toFixed(2)}%`} />
             <Kpi icon={<Truck size={19} />} label="Capacidad flota diaria" value={`${format(dailyFleetCapacity)} t`} />
           </section>
         )}

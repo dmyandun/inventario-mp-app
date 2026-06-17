@@ -80,9 +80,13 @@ export function getKpis(rows: InventoryRow[]) {
   const totalCapacity = sum(rows.map((row) => row.capacidad));
   const totalNetInventory = sum(rows.map((row) => row.disponible));
   const committedFuture = sum(rows.map((row) => row.transito + row.importaciones));
+  // La acidez (% de acidos grasos libres) solo se mide en las extractoras; el
+  // resto de tipos no reporta el dato, asi que se pondera solo sobre ellas.
+  const extractoraRows = rows.filter((row) => normalize(row.tipo) === "EXTRACTORA");
+  const extractoraInventory = sum(extractoraRows.map((row) => row.disponible));
   const weightedAcidity =
-    totalNetInventory > 0
-      ? sum(rows.map((row) => row.disponible * row.acidez)) / totalNetInventory
+    extractoraInventory > 0
+      ? sum(extractoraRows.map((row) => row.disponible * row.acidez)) / extractoraInventory
       : 0;
 
   return {
