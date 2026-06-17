@@ -33,6 +33,26 @@ export type RouteCost = {
   costoPorKm: number;
 };
 
+export type DistributionStop = {
+  origen: string;
+  producto: string;
+  tanque: string;
+  occupancy: number;
+  acidez: number;
+  urgency: number;
+  toneladas: number;
+  camiones: number;
+  viajesPorCamion: number;
+};
+
+export type DistributionPlan = {
+  stops: DistributionStop[];
+  toneladasTotales: number;
+  camionesUsados: number;
+  viajesTotales: number;
+  capacidadDiaria: number;
+};
+
 export type Recommendation = {
   id: string;
   priority: "alta" | "media" | "baja";

@@ -18,9 +18,9 @@ import {
 import type { ReactNode } from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { parseInventoryWorkbook } from "@/lib/excel";
-import { buildRecommendations, getKpis } from "@/lib/optimizer";
+import { buildDistributionPlan, buildRecommendations, getKpis } from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
-import { FleetInput, InventoryRow } from "@/lib/types";
+import { DistributionPlan, FleetInput, InventoryRow } from "@/lib/types";
 
 type View = "inventario" | "refineria" | "rutas" | "ia";
 
@@ -52,7 +52,9 @@ export default function Home() {
   const kpis = getKpis(currentRows);
   const refineryKpis = getKpis(refineryRows);
   const recommendations = buildRecommendations(currentRows, sampleRoutes, fleet);
+  const distributionPlan = buildDistributionPlan(currentRows, fleet);
   const dailyFleetCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
+  const refineryTransito = sum(refineryRows.map((row) => row.transito));
   const refineryOpenDemand = Math.max(
     0,
     sum(refineryRows.map((row) => row.pedido - row.retirado + row.pendienteRetiro - row.transito))
@@ -198,12 +200,21 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="grid kpis">
-          <Kpi icon={<PackageCheck size={19} />} label="Inventario neto" value={`${format(kpis.totalNetInventory)} t`} />
-          <Kpi icon={<Gauge size={19} />} label="Ocupación nacional" value={`${(kpis.occupancy * 100).toFixed(1)}%`} />
-          <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={kpis.weightedAcidity.toFixed(2)} />
-          <Kpi icon={<Truck size={19} />} label="Capacidad flota diaria" value={`${format(dailyFleetCapacity)} t`} />
-        </section>
+        {view === "refineria" ? (
+          <section className="grid kpis">
+            <Kpi icon={<PackageCheck size={19} />} label="Inventario neto refinería" value={`${format(refineryKpis.totalNetInventory)} t`} />
+            <Kpi icon={<Gauge size={19} />} label="Ocupación de la refinería" value={`${(refineryKpis.occupancy * 100).toFixed(1)}%`} />
+            <Kpi icon={<Truck size={19} />} label="Toneladas en tránsito" value={`${format(refineryTransito)} t`} />
+            <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={refineryKpis.weightedAcidity.toFixed(2)} />
+          </section>
+        ) : (
+          <section className="grid kpis">
+            <Kpi icon={<PackageCheck size={19} />} label="Inventario neto" value={`${format(kpis.totalNetInventory)} t`} />
+            <Kpi icon={<Gauge size={19} />} label="Ocupación nacional" value={`${(kpis.occupancy * 100).toFixed(1)}%`} />
+            <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={kpis.weightedAcidity.toFixed(2)} />
+            <Kpi icon={<Truck size={19} />} label="Capacidad flota diaria" value={`${format(dailyFleetCapacity)} t`} />
+          </section>
+        )}
 
         {view === "inventario" && (
           <InventoryView
@@ -223,15 +234,14 @@ export default function Home() {
           <RefineryView
             refineryRows={refineryRows}
             originRows={originRows}
-            refineryKpis={refineryKpis}
-            refineryOpenDemand={refineryOpenDemand}
-            dailyFleetCapacity={dailyFleetCapacity}
             askAi={askAi}
           />
         )}
 
         {view === "rutas" && (
           <RoutesView
+            plan={distributionPlan}
+            fleet={fleet}
             dailyFleetCapacity={dailyFleetCapacity}
             askAi={askAi}
           />
@@ -515,32 +525,20 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
 function RefineryView({
   refineryRows,
   originRows,
-  refineryKpis,
-  refineryOpenDemand,
-  dailyFleetCapacity,
   askAi
 }: {
   refineryRows: InventoryRow[];
   originRows: InventoryRow[];
-  refineryKpis: ReturnType<typeof getKpis>;
-  refineryOpenDemand: number;
-  dailyFleetCapacity: number;
   askAi: (question: string) => void;
 }) {
-  const coverageDays = dailyFleetCapacity > 0 ? refineryKpis.totalNetInventory / dailyFleetCapacity : 0;
   return (
-    <section className="grid content-grid">
+    <section className="grid content-stack">
       <div className="card">
         <div className="section-title">
           <h3>Estado de DANEC SANGOLQUI</h3>
-          <button className="btn" onClick={() => askAi("Evalua riesgo de abastecimiento de refineria y prioriza acciones.")}> 
+          <button className="btn" onClick={() => askAi("Evalua riesgo de abastecimiento de refineria y prioriza acciones.")}>
             <Bot size={16} /> Evaluar
           </button>
-        </div>
-        <div className="mini-grid">
-          <Kpi icon={<Factory size={18} />} label="Inventario refineria" value={`${format(refineryKpis.totalNetInventory)} t`} />
-          <Kpi icon={<AlertTriangle size={18} />} label="Demanda abierta" value={`${format(refineryOpenDemand)} t`} />
-          <Kpi icon={<Gauge size={18} />} label="Cobertura estimada" value={`${coverageDays.toFixed(1)} dias`} />
         </div>
         <InventoryTable rows={refineryRows} />
       </div>
@@ -553,14 +551,19 @@ function RefineryView({
 }
 
 function RoutesView({
+  plan,
+  fleet,
   dailyFleetCapacity,
   askAi
 }: {
+  plan: DistributionPlan;
+  fleet: FleetInput;
   dailyFleetCapacity: number;
   askAi: (question: string) => void;
 }) {
   return (
     <section className="grid content-stack">
+      <DistributionPlanCard plan={plan} fleet={fleet} askAi={askAi} />
       <div className="card">
         <div className="section-title">
           <h3>Matriz de rutas</h3>
@@ -596,6 +599,74 @@ function RoutesView({
         </div>
       </div>
     </section>
+  );
+}
+
+function DistributionPlanCard({
+  plan,
+  fleet,
+  askAi
+}: {
+  plan: DistributionPlan;
+  fleet: FleetInput;
+  askAi: (question: string) => void;
+}) {
+  return (
+    <div className="card">
+      <div className="section-title">
+        <div>
+          <h3>Plan de distribución diario</h3>
+          <p className="section-note">
+            Flota: {format(fleet.unidades)} camiones · {format(plan.capacidadDiaria)} t/día · asignadas{" "}
+            {format(plan.toneladasTotales)} t en {format(plan.camionesUsados)} camiones. Prioriza ubicaciones
+            copadas y de mayor acidez.
+          </p>
+        </div>
+        <button className="btn" onClick={() => askAi("Revisa el plan de distribucion diario y sugiere ajustes por ocupacion, acidez y flota.")}>
+          <Bot size={16} /> Revisar
+        </button>
+      </div>
+      {plan.stops.length === 0 ? (
+        <div className="empty-state">No hay orígenes con inventario disponible para despachar.</div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Origen</th>
+                <th>Producto</th>
+                <th>Ocupación</th>
+                <th>Acidez</th>
+                <th>Toneladas</th>
+                <th>Camiones</th>
+                <th>Viajes/camión</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plan.stops.map((stop, index) => (
+                <tr key={`${stop.origen}-${stop.tanque}-${stop.producto}-${index}`}>
+                  <td>{stop.origen}</td>
+                  <td>{stop.producto}</td>
+                  <td>{(stop.occupancy * 100).toFixed(1)}%</td>
+                  <td>{stop.acidez.toFixed(1)}</td>
+                  <td>{format(stop.toneladas)} t</td>
+                  <td>{format(stop.camiones)}</td>
+                  <td>{format(stop.viajesPorCamion)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={4}>Total</td>
+                <td>{format(plan.toneladasTotales)} t</td>
+                <td>{format(plan.camionesUsados)}</td>
+                <td>{format(plan.viajesTotales)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
