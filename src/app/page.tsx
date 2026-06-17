@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   Bot,
+  CheckCircle2,
   Database,
   FileSpreadsheet,
   Gauge,
@@ -15,7 +16,7 @@ import {
   X
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { parseInventoryWorkbook } from "@/lib/excel";
 import { buildDistributionPlan, buildRecommendations, getKpis } from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
@@ -40,6 +41,23 @@ export default function Home() {
   const [loadingAi, setLoadingAi] = useState(false);
   const [priorityAi, setPriorityAi] = useState("");
   const [loadingPriorityAi, setLoadingPriorityAi] = useState(false);
+  // Acumulado real de toneladas transportadas (planes aprobados en Supabase).
+  // null = Supabase no configurado/sin datos -> se usa el total del plan del dia.
+  const [totalTransportado, setTotalTransportado] = useState<number | null>(null);
+
+  const refreshTransported = useCallback(async () => {
+    try {
+      const response = await fetch("/api/plan", { cache: "no-store" });
+      const data = await response.json();
+      setTotalTransportado(data.ok ? data.totalTransportado : null);
+    } catch {
+      setTotalTransportado(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshTransported();
+  }, [refreshTransported]);
 
   const products = useMemo(() => ["TODOS", ...Array.from(new Set(rows.map((row) => row.producto)))], [rows]);
   const productRows = product === "TODOS" ? rows : rows.filter((row) => row.producto === product);
@@ -203,7 +221,7 @@ export default function Home() {
 
         {view === "rutas" ? (
           <section className="grid kpis">
-            <Kpi icon={<PackageCheck size={19} />} label="Inventario transportado" value={`${format(distributionPlan.toneladasTotales)} t`} />
+            <Kpi icon={<PackageCheck size={19} />} label="Inventario transportado" value={`${format(totalTransportado ?? distributionPlan.toneladasTotales)} t`} />
             <Kpi icon={<Gauge size={19} />} label="Ocupación flota" value={`${(fleetOccupancy * 100).toFixed(1)}%`} />
             <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={`${kpis.weightedAcidity.toFixed(2)}%`} />
             <Kpi icon={<Truck size={19} />} label="Capacidad flota diaria" value={`${format(dailyFleetCapacity)} t`} />
@@ -237,6 +255,7 @@ export default function Home() {
             fleet={fleet}
             dailyFleetCapacity={dailyFleetCapacity}
             askAi={askAi}
+            onApproved={refreshTransported}
           />
         )}
 
@@ -520,16 +539,18 @@ function RoutesView({
   plan,
   fleet,
   dailyFleetCapacity,
-  askAi
+  askAi,
+  onApproved
 }: {
   plan: DistributionPlan;
   fleet: FleetInput;
   dailyFleetCapacity: number;
   askAi: (question: string) => void;
+  onApproved: () => void;
 }) {
   return (
     <section className="grid content-stack">
-      <DistributionPlanCard plan={plan} fleet={fleet} askAi={askAi} />
+      <DistributionPlanCard plan={plan} fleet={fleet} askAi={askAi} onApproved={onApproved} />
       <div className="card">
         <div className="section-title">
           <h3>Matriz de rutas</h3>
@@ -582,15 +603,18 @@ function stopKey(stop: DistributionPlan["stops"][number], index: number) {
 function DistributionPlanCard({
   plan,
   fleet,
-  askAi
+  askAi,
+  onApproved
 }: {
   plan: DistributionPlan;
   fleet: FleetInput;
   askAi: (question: string) => void;
+  onApproved: () => void;
 }) {
   const [edits, setEdits] = useState<Record<string, DispatchFields>>({});
   const [emailTo, setEmailTo] = useState("");
   const [sending, setSending] = useState<"telegram" | "email" | null>(null);
+  const [approving, setApproving] = useState(false);
   const [status, setStatus] = useState("");
 
   function fieldsFor(stop: DistributionPlan["stops"][number], index: number): DispatchFields {
@@ -696,6 +720,50 @@ function DistributionPlanCard({
     }
   }
 
+  // Aprueba el plan: guarda los despachos en Supabase y los cuenta como
+  // transportados (refresca el KPI "Inventario transportado" via onApproved).
+  async function approve() {
+    if (orders.length === 0) return;
+    setApproving(true);
+    setStatus("Aprobando plan…");
+    try {
+      const planId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
+      const fecha = new Date().toISOString().slice(0, 10);
+      const stops = orders.map(({ stop, fields }) => ({
+        plan_id: planId,
+        fecha,
+        partida: fields.partida || stop.origen,
+        destino: fields.destino || refineryName,
+        producto: stop.producto,
+        tanque: stop.tanque,
+        toneladas: Number(fields.toneladas) || 0,
+        camiones: stop.camiones,
+        viajes_por_camion: stop.viajesPorCamion,
+        placas: fields.placas,
+        occupancy: stop.occupancy,
+        acidez: stop.acidez
+      }));
+      const response = await fetch("/api/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stops })
+      });
+      const data = await response.json();
+      if (data.ok) {
+        setStatus(`Plan aprobado: ${format(data.toneladas)} t registradas como transportadas.`);
+        onApproved();
+      } else {
+        setStatus(data.message ?? "No se pudo aprobar el plan.");
+      }
+    } catch {
+      setStatus("Error de red al aprobar el plan.");
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  const busy = approving || sending !== null;
+
   return (
     <div className="card">
       <div className="section-title">
@@ -789,11 +857,14 @@ function DistributionPlanCard({
               onChange={(event) => setEmailTo(event.target.value)}
             />
             <div className="dispatch-actions">
-              <button className="btn" onClick={() => send("telegram")} disabled={sending !== null}>
+              <button className="btn" onClick={() => send("telegram")} disabled={busy}>
                 <Send size={16} /> {sending === "telegram" ? "Enviando…" : "Enviar por Telegram"}
               </button>
-              <button className="btn primary" onClick={() => send("email")} disabled={sending !== null}>
+              <button className="btn" onClick={() => send("email")} disabled={busy}>
                 <Send size={16} /> {sending === "email" ? "Enviando…" : "Enviar por correo"}
+              </button>
+              <button className="btn primary" onClick={approve} disabled={busy}>
+                <CheckCircle2 size={16} /> {approving ? "Aprobando…" : "Aprobar plan"}
               </button>
             </div>
           </div>
