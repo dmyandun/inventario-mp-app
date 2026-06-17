@@ -5,7 +5,10 @@
 -- replican lo que genera el plan (ver DistributionStop en src/lib/types.ts) mas
 -- los campos editables de la orden (partida, placas, destino, toneladas).
 
-create table if not exists approved_dispatches (
+-- Las tablas usan el prefijo del nombre de la app (inventario_mp_app_) para
+-- distinguirlas de otros proyectos en la misma base de Supabase.
+
+create table if not exists inventario_mp_app_approved_dispatches (
   id                uuid primary key default gen_random_uuid(),
   plan_id           uuid not null,                 -- agrupa los stops aprobados juntos
   approved_at       timestamptz not null default now(),
@@ -22,11 +25,20 @@ create table if not exists approved_dispatches (
   acidez            numeric
 );
 
-create index if not exists approved_dispatches_plan_id_idx on approved_dispatches (plan_id);
-create index if not exists approved_dispatches_fecha_idx on approved_dispatches (fecha);
+create index if not exists inventario_mp_app_approved_dispatches_plan_id_idx
+  on inventario_mp_app_approved_dispatches (plan_id);
+create index if not exists inventario_mp_app_approved_dispatches_fecha_idx
+  on inventario_mp_app_approved_dispatches (fecha);
+
+-- Activa RLS: sin politicas, la llave publishable/anon queda sin acceso (deny
+-- por defecto). La app entra solo desde el servidor con la llave secreta
+-- (service_role / sb_secret_...), que SALTA RLS, asi que no se necesitan
+-- politicas y la tabla queda bloqueada para clientes publicos.
+alter table inventario_mp_app_approved_dispatches enable row level security;
 
 -- El acumulado "Inventario transportado" = suma de toneladas:
---   select coalesce(sum(toneladas), 0) as total_transportado from approved_dispatches;
+--   select coalesce(sum(toneladas), 0) as total_transportado from inventario_mp_app_approved_dispatches;
 --
--- La app accede con el service_role key SOLO desde rutas server-side
--- (src/app/api/plan/route.ts); por eso no se habilita RLS para el anon key.
+-- La app accede SOLO desde rutas server-side (src/app/api/plan/route.ts) con la
+-- llave secreta de servidor: service_role clasica (JWT) o la nueva secret key
+-- (sb_secret_...). Ambas saltan RLS. La publishable/anon NO sirve para insertar.

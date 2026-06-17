@@ -5,16 +5,20 @@ import { NextResponse } from "next/server";
 // Si faltan las variables responde ok:false con un mensaje, igual que las otras
 // rutas (telegram/email), para no romper la app sin configurar.
 
-const TABLE = "approved_dispatches";
+const TABLE = "inventario_mp_app_approved_dispatches";
 
 function config() {
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  // Acepta la llave secreta de servidor en cualquier formato/nombre: la
+  // service_role clasica (JWT) o la nueva secret key (sb_secret_...). Ambas
+  // sirven como apikey/Bearer en PostgREST y saltan RLS. NO usar la
+  // publishable/anon aqui (respeta RLS y no podria insertar).
+  const key = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   return { url, key, ready: Boolean(url && key) };
 }
 
 const MISSING_MESSAGE =
-  "Configura SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY para guardar y acumular planes aprobados.";
+  "Configura SUPABASE_URL y la llave secreta (SUPABASE_SECRET_KEY o SUPABASE_SERVICE_ROLE_KEY) para guardar y acumular planes aprobados.";
 
 // GET: devuelve el acumulado de toneladas transportadas (suma de la tabla).
 export async function GET() {
