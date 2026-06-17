@@ -287,7 +287,7 @@ function InventoryView({
   setProduct: (value: string) => void;
   fleet: FleetInput;
   setFleet: (value: FleetInput) => void;
-  history: Array<{ date: string; stock: number; transito: number }>;
+  history: ReturnType<typeof buildInventoryHistory>;
   heatmap: ReturnType<typeof buildLocationHeatmap>;
   dataSource: "demo" | "excel";
 }) {
@@ -332,7 +332,7 @@ function InventoryHistoryChart({
   history,
   dataSource
 }: {
-  history: Array<{ date: string; stock: number; transito: number }>;
+  history: ReturnType<typeof buildInventoryHistory>;
   dataSource: "demo" | "excel";
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -369,7 +369,7 @@ function InventoryHistoryChart({
   const lineFor = (key: "stock" | "transito") =>
     history.map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yFor(point[key])}`).join(" ");
   const tooltipWidth = 188;
-  const tooltipHeight = 72;
+  const tooltipHeight = 90;
   const tooltipX = hoveredIndex === null ? 0 : Math.min(width - tooltipWidth - 10, Math.max(10, xFor(hoveredIndex) - tooltipWidth / 2));
   const tooltipY =
     hoveredIndex === null
@@ -444,6 +444,9 @@ function InventoryHistoryChart({
               </text>
               <text x={tooltipX + 12} y={tooltipY + 44}>Inventario: {format(hoveredPoint.stock)} t</text>
               <text x={tooltipX + 12} y={tooltipY + 62}>En tránsito: {format(hoveredPoint.transito)} t</text>
+              <text x={tooltipX + 12} y={tooltipY + 80}>
+                Ocupación: {hoveredPoint.capacidad > 0 ? `${((hoveredPoint.stock / hoveredPoint.capacidad) * 100).toFixed(1)}%` : "s/d"}
+              </text>
             </g>
           )}
         </svg>
@@ -1050,14 +1053,15 @@ function format(value: number) {
 }
 
 function buildInventoryHistory(rows: InventoryRow[]) {
-  const grouped = new Map<string, { date: string; stock: number; transito: number }>();
+  const grouped = new Map<string, { date: string; stock: number; transito: number; capacidad: number }>();
 
   rows.forEach((row) => {
     const date = normalizeDate(row.fecha) || "Sin fecha";
-    const current = grouped.get(date) ?? { date, stock: 0, transito: 0 };
+    const current = grouped.get(date) ?? { date, stock: 0, transito: 0, capacidad: 0 };
     if (row.tanque) {
       // Stock fisico en tanque (disponible: refineria/puerto no llenan INVENTARIO).
       current.stock += row.disponible;
+      current.capacidad += row.capacidad;
     } else {
       // Tipos de suministro: cada uno llena solo su columna
       // (TRANSITO->transito, IMPORTACIONES->importaciones, PROVEEDORES->pendienteRetiro).
