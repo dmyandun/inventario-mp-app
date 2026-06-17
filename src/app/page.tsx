@@ -600,7 +600,6 @@ function RoutesView({
 }
 
 type DispatchFields = {
-  chofer: string;
   placas: string;
   toneladas: string;
   partida: string;
@@ -629,7 +628,6 @@ function DistributionPlanCard({
     const key = stopKey(stop, index);
     return (
       edits[key] ?? {
-        chofer: "",
         placas: "",
         toneladas: String(stop.toneladas),
         partida: stop.origen,
@@ -658,7 +656,7 @@ function DistributionPlanCard({
       return [
         `<b>${index + 1}. ${fields.partida || stop.origen} → ${fields.destino || refineryName}</b>`,
         `Producto: ${stop.producto} · ${fields.toneladas || "0"} t`,
-        `Chofer: ${fields.chofer || "—"} · Placas: ${fields.placas || "—"}`
+        `Placas: ${fields.placas || "—"}`
       ].join("\n");
     });
     return `<b>🚚 ORDEN DE DESPACHO – ${fechaTexto}</b>\n\n${lines.join("\n\n")}`;
@@ -674,7 +672,6 @@ function DistributionPlanCard({
           <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.destino || refineryName}</td>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;">${stop.producto}</td>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;text-align:right;">${fields.toneladas || "0"} t</td>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.chofer || "—"}</td>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.placas || "—"}</td>
         </tr>`
       )
@@ -690,7 +687,6 @@ function DistributionPlanCard({
               <th style="padding:6px 10px;border:1px solid #d9e0d4;">Destino</th>
               <th style="padding:6px 10px;border:1px solid #d9e0d4;">Producto</th>
               <th style="padding:6px 10px;border:1px solid #d9e0d4;">Toneladas</th>
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Chofer</th>
               <th style="padding:6px 10px;border:1px solid #d9e0d4;">Placas</th>
             </tr>
           </thead>
@@ -756,11 +752,8 @@ function DistributionPlanCard({
                 <tr>
                   <th>Partida</th>
                   <th>Producto</th>
-                  <th>Ocup.</th>
-                  <th>Acidez</th>
                   <th>Camiones</th>
                   <th>Toneladas</th>
-                  <th>Chofer</th>
                   <th>Placas del tanque</th>
                   <th>Destino</th>
                 </tr>
@@ -779,8 +772,6 @@ function DistributionPlanCard({
                         />
                       </td>
                       <td>{stop.producto}</td>
-                      <td>{(stop.occupancy * 100).toFixed(1)}%</td>
-                      <td>{stop.acidez.toFixed(1)}</td>
                       <td>{format(stop.camiones)}</td>
                       <td>
                         <input
@@ -789,14 +780,6 @@ function DistributionPlanCard({
                           min={0}
                           value={fields.toneladas}
                           onChange={(event) => update(key, fields, "toneladas", event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className="cell-input"
-                          placeholder="Nombre del chofer"
-                          value={fields.chofer}
-                          onChange={(event) => update(key, fields, "chofer", event.target.value)}
                         />
                       </td>
                       <td>
@@ -820,10 +803,10 @@ function DistributionPlanCard({
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={4}>Total</td>
+                  <td colSpan={2}>Total</td>
                   <td>{format(plan.camionesUsados)}</td>
                   <td>{format(plan.toneladasTotales)} t</td>
-                  <td colSpan={3} />
+                  <td colSpan={2} />
                 </tr>
               </tfoot>
             </table>
