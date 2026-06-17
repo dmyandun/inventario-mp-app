@@ -1179,13 +1179,15 @@ function comparableDate(value: string) {
 function shortDate(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "short" });
+  // La fecha canonica (YYYY-MM-DD) es el dia UTC; se formatea en UTC para no
+  // retroceder un dia al renderizar en zonas horarias negativas (Ecuador UTC-5).
+  return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "short", timeZone: "UTC" });
 }
 
 function longDate(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "long", year: "numeric" });
+  return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 function sum(values: number[]) {
