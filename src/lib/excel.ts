@@ -15,7 +15,17 @@ export async function parseInventoryWorkbook(file: File): Promise<InventoryRow[]
   const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
   // No se exige tanque: TIPOs de suministro (PROVEEDORES, TRANSITO, IMPORTACIONES)
   // no son tanques fisicos y no tienen esa columna, pero deben mostrarse.
-  return rawRows.map(mapRow).filter((row) => row.nombre && row.producto);
+  // Solo interesan aceites y sus derivados: se descartan residuos, gas y diesel.
+  return rawRows
+    .map(mapRow)
+    .filter((row) => row.nombre && row.producto && isOilProduct(row.producto));
+}
+
+// Excluye productos que no son aceite crudo ni derivados (residuo, gas, diesel, trigo).
+const EXCLUDED_PRODUCT = /RESIDUO|GAS|DI[EÉ]SEL|TRIGO/;
+
+function isOilProduct(producto: string) {
+  return !EXCLUDED_PRODUCT.test(producto.toUpperCase());
 }
 
 function mapRow(row: Record<string, unknown>): InventoryRow {

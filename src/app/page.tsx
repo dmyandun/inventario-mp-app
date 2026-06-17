@@ -30,8 +30,8 @@ export default function Home() {
   const [rows, setRows] = useState<InventoryRow[]>(sampleInventory);
   const [dataSource, setDataSource] = useState<"demo" | "excel">("demo");
   const [fleet, setFleet] = useState<FleetInput>({
-    unidades: 12,
-    toneladasPorUnidad: 28,
+    unidades: 65,
+    toneladasPorUnidad: 32,
     viajesPorDia: 1
   });
   const [view, setView] = useState<View>("inventario");
