@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Bot,
   Database,
-  Factory,
   FileSpreadsheet,
   Gauge,
   LineChart,
@@ -22,7 +21,7 @@ import { buildDistributionPlan, buildRecommendations, getKpis } from "@/lib/opti
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
 import { DistributionPlan, FleetInput, InventoryRow } from "@/lib/types";
 
-type View = "inventario" | "refineria" | "rutas" | "ia";
+type View = "inventario" | "rutas" | "ia";
 
 const refineryName = "DANEC SANGOLQUI";
 
@@ -48,13 +47,16 @@ export default function Home() {
   const inventoryHistory = buildInventoryHistory(productRows);
   const locationHeatmap = buildLocationHeatmap(productRows);
   const refineryRows = currentRows.filter((row) => normalize(row.nombre) === normalize(refineryName));
-  const originRows = currentRows.filter((row) => normalize(row.nombre) !== normalize(refineryName));
   const kpis = getKpis(currentRows);
   const refineryKpis = getKpis(refineryRows);
   const recommendations = buildRecommendations(currentRows, sampleRoutes, fleet);
   const distributionPlan = buildDistributionPlan(currentRows, fleet);
   const dailyFleetCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
-  const refineryTransito = sum(refineryRows.map((row) => row.transito));
+  // Ocupacion de flota: toneladas asignadas por el plan diario vs. capacidad diaria.
+  const fleetOccupancy =
+    distributionPlan.capacidadDiaria > 0
+      ? distributionPlan.toneladasTotales / distributionPlan.capacidadDiaria
+      : 0;
   const refineryOpenDemand = Math.max(
     0,
     sum(refineryRows.map((row) => row.pedido - row.retirado + row.pendienteRetiro - row.transito))
@@ -164,7 +166,6 @@ export default function Home() {
         </div>
         <nav className="nav" aria-label="Principal">
           <NavButton active={view === "inventario"} onClick={() => setView("inventario")} icon={<Database size={18} />} label="Inventario" />
-          <NavButton active={view === "refineria"} onClick={() => setView("refineria")} icon={<Factory size={18} />} label="Refineria" />
           <NavButton active={view === "rutas"} onClick={() => setView("rutas")} icon={<Route size={18} />} label="Rutas" />
           <NavButton active={view === "ia"} onClick={() => setView("ia")} icon={<Bot size={18} />} label="IA" />
         </nav>
@@ -200,11 +201,12 @@ export default function Home() {
           </div>
         </section>
 
-        {view === "refineria" ? (
-          <section className="grid kpis kpis--three">
-            <Kpi icon={<PackageCheck size={19} />} label="Inventario neto refinería" value={`${format(refineryKpis.totalNetInventory)} t`} />
-            <Kpi icon={<Gauge size={19} />} label="Ocupación de la refinería" value={`${(refineryKpis.occupancy * 100).toFixed(1)}%`} />
-            <Kpi icon={<Truck size={19} />} label="Toneladas en tránsito" value={`${format(refineryTransito)} t`} />
+        {view === "rutas" ? (
+          <section className="grid kpis">
+            <Kpi icon={<PackageCheck size={19} />} label="Inventario transportado" value={`${format(distributionPlan.toneladasTotales)} t`} />
+            <Kpi icon={<Gauge size={19} />} label="Ocupación flota" value={`${(fleetOccupancy * 100).toFixed(1)}%`} />
+            <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={`${kpis.weightedAcidity.toFixed(2)}%`} />
+            <Kpi icon={<Truck size={19} />} label="Capacidad flota diaria" value={`${format(dailyFleetCapacity)} t`} />
           </section>
         ) : (
           <section className="grid kpis">
@@ -226,14 +228,6 @@ export default function Home() {
             history={inventoryHistory}
             heatmap={locationHeatmap}
             dataSource={dataSource}
-          />
-        )}
-
-        {view === "refineria" && (
-          <RefineryView
-            refineryRows={refineryRows}
-            originRows={originRows}
-            askAi={askAi}
           />
         )}
 
@@ -519,34 +513,6 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
         </div>
       )}
     </div>
-  );
-}
-
-function RefineryView({
-  refineryRows,
-  originRows,
-  askAi
-}: {
-  refineryRows: InventoryRow[];
-  originRows: InventoryRow[];
-  askAi: (question: string) => void;
-}) {
-  return (
-    <section className="grid content-stack">
-      <div className="card">
-        <div className="section-title">
-          <h3>Estado de DANEC SANGOLQUI</h3>
-          <button className="btn" onClick={() => askAi("Evalua riesgo de abastecimiento de refineria y prioriza acciones.")}>
-            <Bot size={16} /> Evaluar
-          </button>
-        </div>
-        <InventoryTable rows={refineryRows} />
-      </div>
-      <div className="card">
-        <div className="section-title"><h3>Orígenes disponibles</h3></div>
-        <InventoryTable rows={originRows.slice(0, 8)} compact />
-      </div>
-    </section>
   );
 }
 
@@ -1035,14 +1001,12 @@ function Kpi({ icon, label, value }: { icon: ReactNode; label: string; value: st
 }
 
 function viewTitle(view: View) {
-  if (view === "refineria") return "Refinería y continuidad de flujo";
   if (view === "rutas") return "Rutas, costo y capacidad logística";
   if (view === "ia") return "Asistente IA operativo";
   return "Gestión de almacenamiento y flujo a refinería";
 }
 
 function viewSubtitle(view: View) {
-  if (view === "refineria") return "Demanda abierta, cobertura, inventario neto y acciones para DANEC SANGOLQUI.";
   if (view === "rutas") return "Priorización por $/km, toneladas sugeridas, acidez y flota disponible.";
   if (view === "ia") return "Consultas ejecutivas con contexto de inventario, rutas, flota y calidad.";
   return "Inventario neto, acidez, capacidad comprometida, prioridades de despacho y alertas.";
