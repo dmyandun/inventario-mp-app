@@ -288,7 +288,7 @@ function InventoryView({
   setProduct: (value: string) => void;
   fleet: FleetInput;
   setFleet: (value: FleetInput) => void;
-  history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
+  history: Array<{ date: string; stock: number; transito: number }>;
   heatmap: ReturnType<typeof buildLocationHeatmap>;
   dataSource: "demo" | "excel";
 }) {
@@ -333,7 +333,7 @@ function InventoryHistoryChart({
   history,
   dataSource
 }: {
-  history: Array<{ date: string; disponible: number; inventario: number; capacidad: number }>;
+  history: Array<{ date: string; stock: number; transito: number }>;
   dataSource: "demo" | "excel";
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -344,7 +344,7 @@ function InventoryHistoryChart({
         <div className="section-title">
           <div>
             <h3>Histórico de inventario</h3>
-            <p className="section-note">Totales por fecha del inventario filtrado.</p>
+            <p className="section-note">Stock disponible en tanques vs. stock en tránsito por fecha.</p>
           </div>
         </div>
         <div className="empty-state">Carga un Excel con fechas para ver la evolución del inventario.</div>
@@ -357,25 +357,25 @@ function InventoryHistoryChart({
   const padding = { top: 18, right: 20, bottom: 34, left: 58 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  const maxValue = Math.max(...history.flatMap((point) => [point.disponible, point.inventario, point.capacidad]), 1);
+  const maxValue = Math.max(...history.flatMap((point) => [point.stock, point.transito]), 1);
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(maxValue * ratio));
   const latest = history[history.length - 1];
   const first = history[0];
-  const change = latest && first ? latest.disponible - first.disponible : 0;
+  const change = latest && first ? latest.stock - first.stock : 0;
   const hoveredPoint = hoveredIndex === null ? null : history[hoveredIndex];
 
   const xFor = (index: number) =>
     padding.left + (history.length === 1 ? plotWidth / 2 : (index / (history.length - 1)) * plotWidth);
   const yFor = (value: number) => padding.top + plotHeight - (value / maxValue) * plotHeight;
-  const lineFor = (key: "disponible" | "inventario") =>
+  const lineFor = (key: "stock" | "transito") =>
     history.map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yFor(point[key])}`).join(" ");
   const tooltipWidth = 188;
-  const tooltipHeight = 104;
+  const tooltipHeight = 72;
   const tooltipX = hoveredIndex === null ? 0 : Math.min(width - tooltipWidth - 10, Math.max(10, xFor(hoveredIndex) - tooltipWidth / 2));
   const tooltipY =
     hoveredIndex === null
       ? 0
-      : Math.max(10, Math.min(height - tooltipHeight - 10, yFor(history[hoveredIndex].disponible) - tooltipHeight - 12));
+      : Math.max(10, Math.min(height - tooltipHeight - 10, yFor(history[hoveredIndex].stock) - tooltipHeight - 12));
 
   return (
     <div className="card history-card">
@@ -404,8 +404,8 @@ function InventoryHistoryChart({
               </text>
             </g>
           ))}
-          <path d={lineFor("inventario")} className="chart-line inventory-line" />
-          <path d={lineFor("disponible")} className="chart-line available-line" />
+          <path d={lineFor("stock")} className="chart-line inventory-line" />
+          <path d={lineFor("transito")} className="chart-line available-line" />
           {history.map((point, index) => (
             <g
               key={point.date}
@@ -421,8 +421,8 @@ function InventoryHistoryChart({
                 height={plotHeight}
                 className="chart-hit-area"
               />
-              <circle cx={xFor(index)} cy={yFor(point.inventario)} r={hoveredIndex === index ? "6" : "4"} className="inventory-dot" />
-              <circle cx={xFor(index)} cy={yFor(point.disponible)} r={hoveredIndex === index ? "6" : "4"} className="available-dot" />
+              <circle cx={xFor(index)} cy={yFor(point.stock)} r={hoveredIndex === index ? "6" : "4"} className="inventory-dot" />
+              <circle cx={xFor(index)} cy={yFor(point.transito)} r={hoveredIndex === index ? "6" : "4"} className="available-dot" />
               {(index === 0 || index === history.length - 1 || history.length <= 4) && (
                 <text x={xFor(index)} y={height - 10} textAnchor="middle">
                   {shortDate(point.date)}
@@ -443,18 +443,16 @@ function InventoryHistoryChart({
               <text x={tooltipX + 12} y={tooltipY + 22} className="tooltip-title">
                 {longDate(hoveredPoint.date)}
               </text>
-              <text x={tooltipX + 12} y={tooltipY + 44}>Disponible: {format(hoveredPoint.disponible)} t</text>
-              <text x={tooltipX + 12} y={tooltipY + 62}>Inventario: {format(hoveredPoint.inventario)} t</text>
-              <text x={tooltipX + 12} y={tooltipY + 80}>Capacidad: {format(hoveredPoint.capacidad)} t</text>
-              <text x={tooltipX + 12} y={tooltipY + 98}>Ocupación: {occupancyRate(hoveredPoint).toFixed(1)}%</text>
+              <text x={tooltipX + 12} y={tooltipY + 44}>Inventario: {format(hoveredPoint.stock)} t</text>
+              <text x={tooltipX + 12} y={tooltipY + 62}>En tránsito: {format(hoveredPoint.transito)} t</text>
             </g>
           )}
         </svg>
       </div>
       <div className="legend">
-        <span><i className="legend-dot available" />Disponible</span>
-        <span><i className="legend-dot inventory" />Inventario bruto</span>
-        <span>Último disponible: <strong>{latest ? `${format(latest.disponible)} t` : "0 t"}</strong></span>
+        <span><i className="legend-dot inventory" />Inventario (disponible)</span>
+        <span><i className="legend-dot available" />Stock en tránsito</span>
+        <span>Último inventario: <strong>{latest ? `${format(latest.stock)} t` : "0 t"}</strong></span>
       </div>
     </div>
   );
@@ -468,7 +466,7 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
       <div className="section-title">
         <div>
           <h3>Ocupación por ubicación</h3>
-          <p className="section-note">Mismo eje de tiempo del histórico, desglosado por ubicación (disponible ÷ capacidad).</p>
+          <p className="section-note">Solo ubicaciones con tanque · disponible ÷ capacidad, por fecha.</p>
         </div>
         <div className="heat-scale" aria-hidden="true">
           <span>0%</span>
@@ -885,14 +883,19 @@ function format(value: number) {
 }
 
 function buildInventoryHistory(rows: InventoryRow[]) {
-  const grouped = new Map<string, { date: string; disponible: number; inventario: number; capacidad: number }>();
+  const grouped = new Map<string, { date: string; stock: number; transito: number }>();
 
   rows.forEach((row) => {
     const date = normalizeDate(row.fecha) || "Sin fecha";
-    const current = grouped.get(date) ?? { date, disponible: 0, inventario: 0, capacidad: 0 };
-    current.disponible += row.disponible;
-    current.inventario += row.inventario;
-    current.capacidad += row.capacidad;
+    const current = grouped.get(date) ?? { date, stock: 0, transito: 0 };
+    if (row.tanque) {
+      // Stock fisico en tanque (disponible: refineria/puerto no llenan INVENTARIO).
+      current.stock += row.disponible;
+    } else {
+      // Tipos de suministro: cada uno llena solo su columna
+      // (TRANSITO->transito, IMPORTACIONES->importaciones, PROVEEDORES->pendienteRetiro).
+      current.transito += row.transito + row.importaciones + row.pendienteRetiro;
+    }
     grouped.set(date, current);
   });
 
@@ -904,6 +907,8 @@ function buildLocationHeatmap(rows: InventoryRow[]) {
   const byLocation = new Map<string, Map<string, { disponible: number; capacidad: number }>>();
 
   rows.forEach((row) => {
+    // Solo ubicaciones con tanque fisico; los tipos de suministro no se grafican.
+    if (!row.tanque) return;
     const date = normalizeDate(row.fecha) || "Sin fecha";
     dateOrder.set(date, comparableDate(date));
     const series = byLocation.get(row.nombre) ?? new Map();
@@ -1010,10 +1015,6 @@ function longDate(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString("es-EC", { day: "2-digit", month: "long", year: "numeric" });
-}
-
-function occupancyRate(point: { disponible: number; capacidad: number }) {
-  return point.capacidad > 0 ? (point.disponible / point.capacidad) * 100 : 0;
 }
 
 function sum(values: number[]) {
