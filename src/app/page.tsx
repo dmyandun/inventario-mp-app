@@ -12,6 +12,8 @@ import {
   LineChart,
   Mail,
   PackageCheck,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Route,
   Save,
@@ -53,6 +55,7 @@ export default function Home() {
     viajesPorDia: 1
   });
   const [fleetSaveStatus, setFleetSaveStatus] = useState("");
+  const [navOpen, setNavOpen] = useState(true);
   const [view, setView] = useState<View>("inventario");
   const [product, setProduct] = useState("TODOS");
   const [question, setQuestion] = useState("");
@@ -572,11 +575,21 @@ export default function Home() {
   }
 
   return (
-    <div className="shell">
+    <div className={`shell${navOpen ? "" : " nav-collapsed"}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">MP</div>
           <h1>Inventario Nacional</h1>
+          <button
+            type="button"
+            className="nav-toggle"
+            onClick={() => setNavOpen((value) => !value)}
+            title={navOpen ? "Colapsar menú" : "Expandir menú"}
+            aria-label={navOpen ? "Colapsar menú" : "Expandir menú"}
+            aria-expanded={navOpen}
+          >
+            {navOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+          </button>
         </div>
         <nav className="nav" aria-label="Principal">
           <NavButton active={view === "datos"} onClick={() => setView("datos")} icon={<SlidersHorizontal size={18} />} label="Datos maestros" />
@@ -594,7 +607,7 @@ export default function Home() {
         <section className="topbar">
           <div>
             <h2>{viewTitle(view)}</h2>
-            <p>{viewSubtitle(view)}</p>
+            {viewSubtitle(view) && <p>{viewSubtitle(view)}</p>}
           </div>
           <div className="actions">
             <label className="btn" title="Cargar Excel ANEXADO">
@@ -720,23 +733,36 @@ function InventoryView({
   heatmap: ReturnType<typeof buildLocationHeatmap>;
   dataSource: "demo" | "excel";
 }) {
+  const [tankCollapsed, setTankCollapsed] = useState(false);
+
   return (
     <section className="grid content-stack">
+      <div className="inventory-filter">
+        <span>Producto</span>
+        <select value={product} onChange={(event) => setProduct(event.target.value)} aria-label="Producto">
+          {products.map((item) => (
+            <option key={item}>{item}</option>
+          ))}
+        </select>
+      </div>
       <InventoryHistoryChart history={history} dataSource={dataSource} />
       <LocationHeatmap heatmap={heatmap} />
       <div className="card">
-          <div className="section-title">
-            <h3>Inventario por tanque</h3>
-            <div className="filters">
-              <select value={product} onChange={(event) => setProduct(event.target.value)} aria-label="Producto">
-                {products.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
-              </select>
+        <div className="section-title">
+          <button
+            type="button"
+            className="collapse-title"
+            onClick={() => setTankCollapsed((value) => !value)}
+            aria-expanded={!tankCollapsed}
+          >
+            {tankCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+            <div>
+              <h3>Inventario por tanque</h3>
             </div>
-          </div>
-          <InventoryTable rows={rows} />
+          </button>
         </div>
+        {!tankCollapsed && <InventoryTable rows={rows} />}
+      </div>
     </section>
   );
 }
@@ -1938,7 +1964,7 @@ function FloatingPriorities({
 function NavButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: ReactNode; label: string }) {
   return (
     <button className={active ? "active" : ""} onClick={onClick} title={label}>
-      {icon} {label}
+      {icon} <span className="nav-label">{label}</span>
     </button>
   );
 }
@@ -1957,14 +1983,14 @@ function viewTitle(view: View) {
   if (view === "rutas") return "Plan de distribución diario";
   if (view === "datos") return "Datos maestros";
   if (view === "ia") return "Asistente IA operativo";
-  return "Gestión de almacenamiento y flujo a refinería";
+  return "Inventario";
 }
 
 function viewSubtitle(view: View) {
   if (view === "rutas") return "Despacho del día por acidez, costo y capacidad de recepción, con histórico de aprobados.";
   if (view === "datos") return "Flota, matriz de rutas y estaciones de recepción que alimentan el plan.";
   if (view === "ia") return "Consultas ejecutivas con contexto de inventario, rutas, flota y calidad.";
-  return "Inventario neto, acidez, capacidad comprometida, prioridades de despacho y alertas.";
+  return "";
 }
 
 function format(value: number) {

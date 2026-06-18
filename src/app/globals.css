@@ -103,6 +103,86 @@ button {
   line-height: 1.4;
 }
 
+/* ===== Colapsar/expandir menú lateral ===== */
+.nav-toggle {
+  margin-left: auto;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: #eef3ea;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.nav-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.shell.nav-collapsed {
+  grid-template-columns: 76px 1fr;
+}
+
+.nav-collapsed .sidebar {
+  padding: 18px 12px;
+  align-items: center;
+}
+
+.nav-collapsed .brand {
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nav-collapsed .brand h1 {
+  display: none;
+}
+
+.nav-collapsed .nav-toggle {
+  margin-left: 0;
+}
+
+.nav-collapsed .nav {
+  width: 100%;
+}
+
+.nav-collapsed .nav button {
+  justify-content: center;
+  padding: 10px;
+}
+
+.nav-collapsed .nav-label {
+  display: none;
+}
+
+.nav-collapsed .sidebar-note {
+  display: none;
+}
+
+/* ===== Filtro de producto (vista Inventario) ===== */
+.inventory-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.inventory-filter span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inventory-filter select {
+  min-height: 36px;
+  min-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: #fff;
+}
+
 .main {
   padding: 26px;
   display: grid;
