@@ -4,19 +4,22 @@ import {
   AlertTriangle,
   Bot,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Database,
   FileSpreadsheet,
   Gauge,
   LineChart,
   PackageCheck,
   Route,
+  Save,
   Send,
   Sparkles,
   Truck,
   X
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseInventoryWorkbook } from "@/lib/excel";
 import {
   buildDistributionPlan,
@@ -31,6 +34,8 @@ import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
 import { DistributionPlan, FleetInput, InventoryRow, RouteCost } from "@/lib/types";
 
 type View = "inventario" | "rutas" | "ia";
+
+type DailyApproved = { fecha: string; camiones: number; costo: number; toneladas: number };
 
 const refineryName = "DANEC SANGOLQUI";
 
@@ -52,14 +57,18 @@ export default function Home() {
   // Acumulado real de toneladas transportadas (planes aprobados en Supabase).
   // null = Supabase no configurado/sin datos -> se usa el total del plan del dia.
   const [totalTransportado, setTotalTransportado] = useState<number | null>(null);
+  // Histórico diario de planes aprobados (camiones y costo por fecha).
+  const [dailyApproved, setDailyApproved] = useState<DailyApproved[]>([]);
 
   const refreshTransported = useCallback(async () => {
     try {
       const response = await fetch("/api/plan", { cache: "no-store" });
       const data = await response.json();
       setTotalTransportado(data.ok ? data.totalTransportado : null);
+      setDailyApproved(data.ok && Array.isArray(data.daily) ? data.daily : []);
     } catch {
       setTotalTransportado(null);
+      setDailyApproved([]);
     }
   }, []);
 
@@ -137,9 +146,15 @@ export default function Home() {
     return list;
   }, [tankNodeNames, routeOverrides]);
 
+  // Edits en memoria (el plan recalcula al vuelo). Persisten al pulsar "Guardar".
+  const dirtyRoutes = useRef<Set<string>>(new Set());
+  const [routesSaveStatus, setRoutesSaveStatus] = useState("");
+
   const updateRoute = useCallback((origen: string, destino: string, patch: Partial<RouteCost>) => {
+    const key = routeKey(origen, destino);
+    dirtyRoutes.current.add(key);
+    setRoutesSaveStatus("Cambios sin guardar");
     setRouteOverrides((prev) => {
-      const key = routeKey(origen, destino);
       const current = prev[key] ?? {};
       const merged: Partial<RouteCost> = {
         km: current.km ?? 0,
@@ -147,21 +162,60 @@ export default function Home() {
         enabled: current.enabled ?? true,
         ...patch
       };
-      // Persistir (fire-and-forget); si Supabase no esta, queda en memoria.
-      fetch("/api/routes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          origen,
-          destino,
-          km: merged.km,
-          costo_por_km: merged.costoPorKm,
-          enabled: merged.enabled
-        })
-      }).catch(() => {});
       return { ...prev, [key]: merged };
     });
   }, []);
+
+  const saveRoutes = useCallback(async () => {
+    const keys = Array.from(dirtyRoutes.current);
+    if (keys.length === 0) {
+      setRoutesSaveStatus("No hay cambios por guardar.");
+      return;
+    }
+    setRoutesSaveStatus("Guardando…");
+    try {
+      let okCount = 0;
+      let failMessage = "";
+      for (const key of keys) {
+        const [origen, destino] = key.split("|||");
+        const override = routeOverrides[key] ?? {};
+        const response = await fetch("/api/routes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            origen,
+            destino,
+            km: override.km ?? 0,
+            costo_por_km: override.costoPorKm ?? 0,
+            enabled: override.enabled ?? true
+          })
+        });
+        const data = await response.json();
+        if (data.ok) {
+          okCount += 1;
+          dirtyRoutes.current.delete(key);
+        } else {
+          failMessage = data.message ?? "No se pudo guardar.";
+        }
+      }
+      const hora = new Date().toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" });
+      setRoutesSaveStatus(
+        failMessage ? failMessage : `Guardado ${okCount} ruta(s) a las ${hora}.`
+      );
+    } catch {
+      setRoutesSaveStatus("Error de red al guardar.");
+    }
+  }, [routeOverrides]);
+
+  // Costo referencial (km × $/km) de una ruta habilitada; 0 si no existe/off.
+  const routeCostRef = useCallback(
+    (origen: string, destino: string) => {
+      const override = routeOverrides[routeKey(origen, destino)];
+      if (!override || override.enabled === false) return 0;
+      return (override.km ?? 0) * (override.costoPorKm ?? 0);
+    },
+    [routeOverrides]
+  );
 
   // Origenes con ruta habilitada hacia la refineria (para el plan y la IA).
   const enabledSources = useMemo(
@@ -184,7 +238,10 @@ export default function Home() {
   const refineryKpis = getKpis(refineryRows);
   const enabledRoutes = routes.filter((route) => route.enabled !== false);
   const recommendations = buildRecommendations(currentRows, enabledRoutes, fleet);
-  const distributionPlan = buildDistributionPlan(currentRows, fleet, enabledSources);
+  const distributionPlan = useMemo(
+    () => buildDistributionPlan(currentRows, fleet, { enabledSources, routeCost: routeCostRef }),
+    [currentRows, fleet, enabledSources, routeCostRef]
+  );
   const dailyFleetCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   // Ocupacion de flota: toneladas asignadas por el plan diario vs. capacidad diaria.
   const fleetOccupancy =
@@ -377,6 +434,10 @@ export default function Home() {
             fleet={fleet}
             routes={routes}
             updateRoute={updateRoute}
+            saveRoutes={saveRoutes}
+            routesSaveStatus={routesSaveStatus}
+            routeCostRef={routeCostRef}
+            dailyApproved={dailyApproved}
             askAi={askAi}
             onApproved={refreshTransported}
           />
@@ -663,6 +724,10 @@ function RoutesView({
   fleet,
   routes,
   updateRoute,
+  saveRoutes,
+  routesSaveStatus,
+  routeCostRef,
+  dailyApproved,
   askAi,
   onApproved
 }: {
@@ -670,96 +735,232 @@ function RoutesView({
   fleet: FleetInput;
   routes: RouteCost[];
   updateRoute: (origen: string, destino: string, patch: Partial<RouteCost>) => void;
+  saveRoutes: () => void;
+  routesSaveStatus: string;
+  routeCostRef: (origen: string, destino: string) => number;
+  dailyApproved: DailyApproved[];
   askAi: (question: string) => void;
   onApproved: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
     <section className="grid content-stack">
-      <DistributionPlanCard plan={plan} fleet={fleet} askAi={askAi} onApproved={onApproved} />
       <div className="card">
         <div className="section-title">
-          <div>
-            <h3>Matriz de rutas</h3>
-            <p className="section-note">
-              Edita km y $/km (costo ref. = km × $/km). El check de cada nodo lo habilita o
-              deshabilita para el plan y la IA.
-            </p>
-          </div>
-          <button className="btn" onClick={() => askAi("Optimiza las rutas habilitadas considerando costo por km, acidez y espacio en refineria y puerto.")}>
-            <Bot size={16} /> Optimizar
+          <button
+            type="button"
+            className="collapse-title"
+            onClick={() => setCollapsed((value) => !value)}
+            aria-expanded={!collapsed}
+          >
+            {collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+            <div>
+              <h3>Matriz de rutas</h3>
+              {!collapsed && (
+                <p className="section-note">
+                  Edita km y $/km (costo ref. = km × $/km), input del plan. El check habilita o
+                  deshabilita cada nodo. Guarda para persistir en Supabase.
+                </p>
+              )}
+            </div>
           </button>
+          {!collapsed && (
+            <div className="routes-save">
+              {routesSaveStatus && <span className="section-note">{routesSaveStatus}</span>}
+              <button className="btn primary" onClick={saveRoutes}>
+                <Save size={16} /> Guardar
+              </button>
+            </div>
+          )}
         </div>
-        {routes.length === 0 ? (
-          <div className="empty-state">Carga datos con ubicaciones de tanque para ver las rutas.</div>
-        ) : (
-          <div className="table-wrap">
-            <table className="routes-table">
-              <thead>
-                <tr>
-                  <th>Origen</th>
-                  <th>Destino</th>
-                  <th>Km</th>
-                  <th>$/km</th>
-                  <th>Costo ref.</th>
-                  <th>Nodos</th>
-                </tr>
-              </thead>
-              <tbody>
-                {routes.map((route) => {
-                  const enabled = route.enabled !== false;
-                  return (
-                    <tr key={routeKey(route.origen, route.destino)} className={enabled ? "" : "route-off"}>
-                      <td>{route.origen}</td>
-                      <td>{route.destino}</td>
-                      <td>
-                        <input
-                          className="cell-input cell-input--num"
-                          type="number"
-                          min={0}
-                          value={route.km}
-                          onChange={(event) =>
-                            updateRoute(route.origen, route.destino, { km: Number(event.target.value) || 0 })
-                          }
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className="cell-input cell-input--num"
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={route.costoPorKm}
-                          onChange={(event) =>
-                            updateRoute(route.origen, route.destino, { costoPorKm: Number(event.target.value) || 0 })
-                          }
-                        />
-                      </td>
-                      <td>${format(route.km * route.costoPorKm)}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className={`node-toggle ${enabled ? "on" : "off"}`}
-                          onClick={() => updateRoute(route.origen, route.destino, { enabled: !enabled })}
-                          title={enabled ? "Nodo habilitado" : "Nodo deshabilitado"}
-                          aria-pressed={enabled}
-                        >
-                          {enabled ? "✓" : "✗"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {!collapsed &&
+          (routes.length === 0 ? (
+            <div className="empty-state">Carga datos con ubicaciones de tanque para ver las rutas.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="routes-table">
+                <thead>
+                  <tr>
+                    <th>Origen</th>
+                    <th>Destino</th>
+                    <th>Km</th>
+                    <th>$/km</th>
+                    <th>Costo ref.</th>
+                    <th>Nodos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {routes.map((route) => {
+                    const enabled = route.enabled !== false;
+                    return (
+                      <tr key={routeKey(route.origen, route.destino)} className={enabled ? "" : "route-off"}>
+                        <td>{route.origen}</td>
+                        <td>{route.destino}</td>
+                        <td>
+                          <input
+                            className="cell-input cell-input--num"
+                            type="number"
+                            min={0}
+                            value={route.km}
+                            onChange={(event) =>
+                              updateRoute(route.origen, route.destino, { km: Number(event.target.value) || 0 })
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="cell-input cell-input--num"
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={route.costoPorKm}
+                            onChange={(event) =>
+                              updateRoute(route.origen, route.destino, { costoPorKm: Number(event.target.value) || 0 })
+                            }
+                          />
+                        </td>
+                        <td>${format(route.km * route.costoPorKm)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className={`node-toggle ${enabled ? "on" : "off"}`}
+                            onClick={() => updateRoute(route.origen, route.destino, { enabled: !enabled })}
+                            title={enabled ? "Nodo habilitado" : "Nodo deshabilitado"}
+                            aria-pressed={enabled}
+                          >
+                            {enabled ? "✓" : "✗"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ))}
       </div>
+
+      <DistributionPlanCard
+        plan={plan}
+        fleet={fleet}
+        routeCostRef={routeCostRef}
+        askAi={askAi}
+        onApproved={onApproved}
+      />
+
+      <FleetCostChart daily={dailyApproved} />
     </section>
   );
 }
 
+function FleetCostChart({ daily }: { daily: DailyApproved[] }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
+  if (daily.length === 0) {
+    return (
+      <div className="card history-card">
+        <div className="section-title">
+          <div>
+            <h3>Camiones y costo por día</h3>
+            <p className="section-note">Histórico de planes aprobados (Supabase).</p>
+          </div>
+        </div>
+        <div className="empty-state">Aprueba planes para ver la asignación de camiones y el costo por día.</div>
+      </div>
+    );
+  }
+
+  const width = 720;
+  const height = 260;
+  const padding = { top: 18, right: 20, bottom: 34, left: 58 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const maxCamiones = Math.max(...daily.map((point) => point.camiones), 1);
+  const maxCosto = Math.max(...daily.map((point) => point.costo), 1);
+  const latest = daily[daily.length - 1];
+
+  const xFor = (index: number) =>
+    padding.left + (daily.length === 1 ? plotWidth / 2 : (index / (daily.length - 1)) * plotWidth);
+  const yCamiones = (value: number) => padding.top + plotHeight - (value / maxCamiones) * plotHeight;
+  const yCosto = (value: number) => padding.top + plotHeight - (value / maxCosto) * plotHeight;
+  const lineFor = (accessor: (point: DailyApproved) => number, scale: (value: number) => number) =>
+    daily.map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${scale(accessor(point))}`).join(" ");
+
+  const tooltipWidth = 190;
+  const tooltipHeight = 72;
+  const hoveredPoint = hoveredIndex === null ? null : daily[hoveredIndex];
+  const tooltipX = hoveredIndex === null ? 0 : Math.min(width - tooltipWidth - 10, Math.max(10, xFor(hoveredIndex) - tooltipWidth / 2));
+  const tooltipY =
+    hoveredIndex === null ? 0 : Math.max(10, yCamiones(daily[hoveredIndex].camiones) - tooltipHeight - 12);
+
+  return (
+    <div className="card history-card">
+      <div className="section-title">
+        <div>
+          <h3>Camiones y costo por día</h3>
+          <p className="section-note">Histórico de planes aprobados (Supabase).</p>
+        </div>
+        <div className="legend">
+          <span><i className="legend-dot inventory" />Camiones</span>
+          <span><i className="legend-dot available" />Costo ($)</span>
+          <span>Último: <strong>{format(latest.camiones)} cam · ${format(latest.costo)}</strong></span>
+        </div>
+      </div>
+      <div className="chart-wrap">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" className="chart-svg">
+          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => (
+            <line
+              key={ratio}
+              x1={padding.left}
+              x2={width - padding.right}
+              y1={padding.top + plotHeight * ratio}
+              y2={padding.top + plotHeight * ratio}
+              className="grid-line"
+            />
+          ))}
+          <path d={lineFor((point) => point.costo, yCosto)} className="chart-line available-line" />
+          <path d={lineFor((point) => point.camiones, yCamiones)} className="chart-line inventory-line" />
+          {daily.map((point, index) => (
+            <g
+              key={point.fecha}
+              className="chart-hit-group"
+              onMouseEnter={() => setHoveredIndex(index)}
+              onFocus={() => setHoveredIndex(index)}
+              tabIndex={0}
+            >
+              <rect
+                x={xFor(index) - Math.max(18, plotWidth / Math.max(daily.length, 1) / 2)}
+                y={padding.top}
+                width={Math.max(36, plotWidth / Math.max(daily.length, 1))}
+                height={plotHeight}
+                className="chart-hit-area"
+              />
+              <circle cx={xFor(index)} cy={yCamiones(point.camiones)} r={hoveredIndex === index ? "6" : "4"} className="inventory-dot" />
+              <circle cx={xFor(index)} cy={yCosto(point.costo)} r={hoveredIndex === index ? "6" : "4"} className="available-dot" />
+              {(index === 0 || index === daily.length - 1 || daily.length <= 4) && (
+                <text x={xFor(index)} y={height - 10} textAnchor="middle">
+                  {shortDate(point.fecha)}
+                </text>
+              )}
+            </g>
+          ))}
+          {hoveredIndex !== null && hoveredPoint && (
+            <g className="chart-tooltip">
+              <line x1={xFor(hoveredIndex)} x2={xFor(hoveredIndex)} y1={padding.top} y2={padding.top + plotHeight} className="hover-line" />
+              <rect x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="8" />
+              <text x={tooltipX + 12} y={tooltipY + 22} className="tooltip-title">{longDate(hoveredPoint.fecha)}</text>
+              <text x={tooltipX + 12} y={tooltipY + 44}>Camiones: {format(hoveredPoint.camiones)}</text>
+              <text x={tooltipX + 12} y={tooltipY + 62}>Costo: ${format(hoveredPoint.costo)}</text>
+            </g>
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 type DispatchFields = {
-  placas: string;
   toneladas: string;
   partida: string;
   destino: string;
@@ -772,11 +973,13 @@ function stopKey(stop: DistributionPlan["stops"][number], index: number) {
 function DistributionPlanCard({
   plan,
   fleet,
+  routeCostRef,
   askAi,
   onApproved
 }: {
   plan: DistributionPlan;
   fleet: FleetInput;
+  routeCostRef: (origen: string, destino: string) => number;
   askAi: (question: string) => void;
   onApproved: () => void;
 }) {
@@ -790,7 +993,6 @@ function DistributionPlanCard({
     const key = stopKey(stop, index);
     return (
       edits[key] ?? {
-        placas: "",
         toneladas: String(stop.toneladas),
         partida: stop.origen,
         destino: refineryName
@@ -802,10 +1004,19 @@ function DistributionPlanCard({
     setEdits((prev) => ({ ...prev, [key]: { ...base, [field]: value } }));
   }
 
+  // Costo estimado del despacho = costo ref. (km × $/km) de la ruta partida→destino
+  // por el numero de viajes del stop.
+  function costoFor(stop: DistributionPlan["stops"][number], fields: DispatchFields) {
+    const viajes = stop.camiones * stop.viajesPorCamion;
+    return Math.round(routeCostRef(fields.partida || stop.origen, fields.destino || refineryName) * viajes);
+  }
+
   const orders = plan.stops.map((stop, index) => {
     const fields = fieldsFor(stop, index);
-    return { stop, fields };
+    return { stop, fields, costo: costoFor(stop, fields) };
   });
+
+  const costoTotal = orders.reduce((total, order) => total + order.costo, 0);
 
   const fechaTexto = new Date().toLocaleDateString("es-EC", {
     year: "numeric",
@@ -814,11 +1025,11 @@ function DistributionPlanCard({
   });
 
   function buildText() {
-    const lines = orders.map(({ stop, fields }, index) => {
+    const lines = orders.map(({ stop, fields, costo }, index) => {
       return [
         `<b>${index + 1}. ${fields.partida || stop.origen} → ${fields.destino || refineryName}</b>`,
         `Producto: ${stop.producto} · ${fields.toneladas || "0"} t`,
-        `Placas: ${fields.placas || "—"}`
+        `Costo estimado: $${format(costo)}`
       ].join("\n");
     });
     return `<b>🚚 ORDEN DE DESPACHO – ${fechaTexto}</b>\n\n${lines.join("\n\n")}`;
@@ -827,14 +1038,14 @@ function DistributionPlanCard({
   function buildHtml() {
     const rowsHtml = orders
       .map(
-        ({ stop, fields }, index) => `
+        ({ stop, fields, costo }, index) => `
         <tr>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;">${index + 1}</td>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.partida || stop.origen}</td>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.destino || refineryName}</td>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;">${stop.producto}</td>
           <td style="padding:6px 10px;border:1px solid #d9e0d4;text-align:right;">${fields.toneladas || "0"} t</td>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.placas || "—"}</td>
+          <td style="padding:6px 10px;border:1px solid #d9e0d4;text-align:right;">$${format(costo)}</td>
         </tr>`
       )
       .join("");
@@ -849,7 +1060,7 @@ function DistributionPlanCard({
               <th style="padding:6px 10px;border:1px solid #d9e0d4;">Destino</th>
               <th style="padding:6px 10px;border:1px solid #d9e0d4;">Producto</th>
               <th style="padding:6px 10px;border:1px solid #d9e0d4;">Toneladas</th>
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Placas</th>
+              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Costo estimado</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
@@ -898,7 +1109,7 @@ function DistributionPlanCard({
     try {
       const planId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`;
       const fecha = new Date().toISOString().slice(0, 10);
-      const stops = orders.map(({ stop, fields }) => ({
+      const stops = orders.map(({ stop, fields, costo }) => ({
         plan_id: planId,
         fecha,
         partida: fields.partida || stop.origen,
@@ -908,7 +1119,7 @@ function DistributionPlanCard({
         toneladas: Number(fields.toneladas) || 0,
         camiones: stop.camiones,
         viajes_por_camion: stop.viajesPorCamion,
-        placas: fields.placas,
+        costo,
         occupancy: stop.occupancy,
         acidez: stop.acidez
       }));
@@ -939,9 +1150,9 @@ function DistributionPlanCard({
         <div>
           <h3>Plan de distribución diario</h3>
           <p className="section-note">
-            Flota: {format(fleet.unidades)} camiones · {format(plan.capacidadDiaria)} t/día · asignadas{" "}
-            {format(plan.toneladasTotales)} t en {format(plan.camionesUsados)} camiones. Completa chofer, placas y
-            destino y envía la orden.
+            Flota disponible: {format(fleet.unidades)} camiones · asignados {format(plan.camionesUsados)} (
+            {format(plan.toneladasTotales)} t) · costo total ${format(plan.costoTotal)}. Optimizado para mínimo costo;
+            ajusta y envía la orden.
           </p>
         </div>
         <button className="btn" onClick={() => askAi("Revisa el plan de distribucion diario y sugiere ajustes por ocupacion, acidez y flota.")}>
@@ -960,8 +1171,8 @@ function DistributionPlanCard({
                   <th>Producto</th>
                   <th>Camiones</th>
                   <th>Toneladas</th>
-                  <th>Placas del tanque</th>
                   <th>Destino</th>
+                  <th>Costo estimado</th>
                 </tr>
               </thead>
               <tbody>
@@ -991,18 +1202,11 @@ function DistributionPlanCard({
                       <td>
                         <input
                           className="cell-input"
-                          placeholder="ABC-1234"
-                          value={fields.placas}
-                          onChange={(event) => update(key, fields, "placas", event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className="cell-input"
                           value={fields.destino}
                           onChange={(event) => update(key, fields, "destino", event.target.value)}
                         />
                       </td>
+                      <td>${format(costoFor(stop, fields))}</td>
                     </tr>
                   );
                 })}
@@ -1012,7 +1216,8 @@ function DistributionPlanCard({
                   <td colSpan={2}>Total</td>
                   <td>{format(plan.camionesUsados)}</td>
                   <td>{format(plan.toneladasTotales)} t</td>
-                  <td colSpan={2} />
+                  <td />
+                  <td>${format(costoTotal)}</td>
                 </tr>
               </tfoot>
             </table>

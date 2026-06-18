@@ -44,6 +44,7 @@ export type DistributionStop = {
   toneladas: number;
   camiones: number;
   viajesPorCamion: number;
+  costo: number;
 };
 
 export type DistributionPlan = {
@@ -52,6 +53,7 @@ export type DistributionPlan = {
   camionesUsados: number;
   viajesTotales: number;
   capacidadDiaria: number;
+  costoTotal: number;
 };
 
 export type Recommendation = {

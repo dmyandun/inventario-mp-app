@@ -27,7 +27,7 @@ export async function GET() {
     return NextResponse.json({ ok: false, message: MISSING_MESSAGE, totalTransportado: null });
   }
 
-  const response = await fetch(`${url}/rest/v1/${TABLE}?select=toneladas`, {
+  const response = await fetch(`${url}/rest/v1/${TABLE}?select=fecha,toneladas,camiones,costo`, {
     headers: { apikey: key!, Authorization: `Bearer ${key!}` },
     cache: "no-store"
   });
@@ -37,9 +37,28 @@ export async function GET() {
     return NextResponse.json({ ok: false, message: `Supabase ${response.status}: ${detail}`, totalTransportado: null });
   }
 
-  const rows = (await response.json()) as Array<{ toneladas: number | string }>;
+  const rows = (await response.json()) as Array<{
+    fecha?: string;
+    toneladas: number | string;
+    camiones?: number | string;
+    costo?: number | string;
+  }>;
   const totalTransportado = rows.reduce((total, row) => total + (Number(row.toneladas) || 0), 0);
-  return NextResponse.json({ ok: true, totalTransportado, registros: rows.length });
+
+  // Agregado por fecha: camiones, costo y toneladas (para el grafico historico).
+  const byDate = new Map<string, { fecha: string; camiones: number; costo: number; toneladas: number }>();
+  for (const row of rows) {
+    const fecha = String(row.fecha ?? "").slice(0, 10);
+    if (!fecha) continue;
+    const current = byDate.get(fecha) ?? { fecha, camiones: 0, costo: 0, toneladas: 0 };
+    current.camiones += Number(row.camiones) || 0;
+    current.costo += Number(row.costo) || 0;
+    current.toneladas += Number(row.toneladas) || 0;
+    byDate.set(fecha, current);
+  }
+  const daily = Array.from(byDate.values()).sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+  return NextResponse.json({ ok: true, totalTransportado, registros: rows.length, daily });
 }
 
 // POST: inserta los stops aprobados del plan diario.

@@ -21,9 +21,13 @@ create table if not exists inventario_mp_app_approved_dispatches (
   camiones          integer not null default 0,
   viajes_por_camion integer not null default 0,
   placas            text,
+  costo             numeric not null default 0,
   occupancy         numeric,
   acidez            numeric
 );
+
+-- Para tablas ya creadas antes de agregar el costo estimado:
+alter table inventario_mp_app_approved_dispatches add column if not exists costo numeric not null default 0;
 
 create index if not exists inventario_mp_app_approved_dispatches_plan_id_idx
   on inventario_mp_app_approved_dispatches (plan_id);
