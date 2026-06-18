@@ -24,10 +24,11 @@ import {
   getExtractoraStatus,
   getIncomingByProduct,
   getKpis,
+  getPuertoFreeCapacity,
   getRefineryFreeCapacity
 } from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
-import { DistributionPlan, FleetInput, InventoryRow } from "@/lib/types";
+import { DistributionPlan, FleetInput, InventoryRow, RouteCost } from "@/lib/types";
 
 type View = "inventario" | "rutas" | "ia";
 
@@ -66,6 +67,113 @@ export default function Home() {
     refreshTransported();
   }, [refreshTransported]);
 
+  // Matriz de rutas editable. routeOverrides guarda km/$/km/enabled por par
+  // origen|||destino (sembrado del demo y luego mezclado con lo guardado en
+  // Supabase). Las filas visibles se derivan de los nodos con tanque.
+  const [routeOverrides, setRouteOverrides] = useState<Record<string, Partial<RouteCost>>>(() => {
+    const seed: Record<string, Partial<RouteCost>> = {};
+    for (const route of sampleRoutes) {
+      seed[routeKey(route.origen, route.destino)] = {
+        km: route.km,
+        costoPorKm: route.costoPorKm,
+        enabled: true
+      };
+    }
+    return seed;
+  });
+
+  const refreshRoutes = useCallback(async () => {
+    try {
+      const response = await fetch("/api/routes", { cache: "no-store" });
+      const data = await response.json();
+      if (!data.ok || !Array.isArray(data.routes)) return;
+      setRouteOverrides((prev) => {
+        const next = { ...prev };
+        for (const row of data.routes) {
+          next[routeKey(row.origen, row.destino)] = {
+            km: Number(row.km) || 0,
+            costoPorKm: Number(row.costo_por_km) || 0,
+            enabled: row.enabled !== false
+          };
+        }
+        return next;
+      });
+    } catch {
+      // Sin Supabase: la matriz funciona en memoria.
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshRoutes();
+  }, [refreshRoutes]);
+
+  // Nodos = ubicaciones con tanque (extractoras, puerto, refineria).
+  const tankNodeNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const row of rows) {
+      if (["EXTRACTORA", "PUERTO", "REFINERIA"].includes(normalize(row.tipo)) && row.nombre) {
+        names.add(row.nombre);
+      }
+    }
+    return Array.from(names).sort();
+  }, [rows]);
+
+  // Matriz completa: todos los pares dirigidos origen->destino (origen != destino).
+  const routes = useMemo<RouteCost[]>(() => {
+    const list: RouteCost[] = [];
+    for (const origen of tankNodeNames) {
+      for (const destino of tankNodeNames) {
+        if (origen === destino) continue;
+        const override = routeOverrides[routeKey(origen, destino)];
+        list.push({
+          origen,
+          destino,
+          km: override?.km ?? 0,
+          costoPorKm: override?.costoPorKm ?? 0,
+          enabled: override?.enabled ?? true
+        });
+      }
+    }
+    return list;
+  }, [tankNodeNames, routeOverrides]);
+
+  const updateRoute = useCallback((origen: string, destino: string, patch: Partial<RouteCost>) => {
+    setRouteOverrides((prev) => {
+      const key = routeKey(origen, destino);
+      const current = prev[key] ?? {};
+      const merged: Partial<RouteCost> = {
+        km: current.km ?? 0,
+        costoPorKm: current.costoPorKm ?? 0,
+        enabled: current.enabled ?? true,
+        ...patch
+      };
+      // Persistir (fire-and-forget); si Supabase no esta, queda en memoria.
+      fetch("/api/routes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origen,
+          destino,
+          km: merged.km,
+          costo_por_km: merged.costoPorKm,
+          enabled: merged.enabled
+        })
+      }).catch(() => {});
+      return { ...prev, [key]: merged };
+    });
+  }, []);
+
+  // Origenes con ruta habilitada hacia la refineria (para el plan y la IA).
+  const enabledSources = useMemo(
+    () =>
+      new Set(
+        routes
+          .filter((route) => route.enabled !== false && normalize(route.destino) === normalize(refineryName))
+          .map((route) => route.origen)
+      ),
+    [routes]
+  );
+
   const products = useMemo(() => ["TODOS", ...Array.from(new Set(rows.map((row) => row.producto)))], [rows]);
   const productRows = product === "TODOS" ? rows : rows.filter((row) => row.producto === product);
   const currentRows = getLatestInventoryRows(productRows);
@@ -74,8 +182,9 @@ export default function Home() {
   const refineryRows = currentRows.filter((row) => normalize(row.nombre) === normalize(refineryName));
   const kpis = getKpis(currentRows);
   const refineryKpis = getKpis(refineryRows);
-  const recommendations = buildRecommendations(currentRows, sampleRoutes, fleet);
-  const distributionPlan = buildDistributionPlan(currentRows, fleet);
+  const enabledRoutes = routes.filter((route) => route.enabled !== false);
+  const recommendations = buildRecommendations(currentRows, enabledRoutes, fleet);
+  const distributionPlan = buildDistributionPlan(currentRows, fleet, enabledSources);
   const dailyFleetCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   // Ocupacion de flota: toneladas asignadas por el plan diario vs. capacidad diaria.
   const fleetOccupancy =
@@ -129,10 +238,11 @@ export default function Home() {
         fleet,
         // Para validar prioridad por acidez y espacio de almacenamiento:
         refineryFreeCapacity: getRefineryFreeCapacity(currentRows),
+        puertoFreeCapacity: getPuertoFreeCapacity(currentRows),
         incomingByProduct: getIncomingByProduct(currentRows),
         extractoraStatus: getExtractoraStatus(currentRows),
         distributionPlan,
-        routes: sampleRoutes,
+        routes: enabledRoutes,
         topRecommendations: recommendations.slice(0, 8),
         inventoryHistory,
         rows: currentRows.slice(0, 30)
@@ -265,7 +375,8 @@ export default function Home() {
           <RoutesView
             plan={distributionPlan}
             fleet={fleet}
-            dailyFleetCapacity={dailyFleetCapacity}
+            routes={routes}
+            updateRoute={updateRoute}
             askAi={askAi}
             onApproved={refreshTransported}
           />
@@ -550,13 +661,15 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
 function RoutesView({
   plan,
   fleet,
-  dailyFleetCapacity,
+  routes,
+  updateRoute,
   askAi,
   onApproved
 }: {
   plan: DistributionPlan;
   fleet: FleetInput;
-  dailyFleetCapacity: number;
+  routes: RouteCost[];
+  updateRoute: (origen: string, destino: string, patch: Partial<RouteCost>) => void;
   askAi: (question: string) => void;
   onApproved: () => void;
 }) {
@@ -565,37 +678,81 @@ function RoutesView({
       <DistributionPlanCard plan={plan} fleet={fleet} askAi={askAi} onApproved={onApproved} />
       <div className="card">
         <div className="section-title">
-          <h3>Matriz de rutas</h3>
-          <button className="btn" onClick={() => askAi("Optimiza las rutas considerando costo por km, acidez y capacidad diaria de flota.")}> 
+          <div>
+            <h3>Matriz de rutas</h3>
+            <p className="section-note">
+              Edita km y $/km (costo ref. = km × $/km). El check de cada nodo lo habilita o
+              deshabilita para el plan y la IA.
+            </p>
+          </div>
+          <button className="btn" onClick={() => askAi("Optimiza las rutas habilitadas considerando costo por km, acidez y espacio en refineria y puerto.")}>
             <Bot size={16} /> Optimizar
           </button>
         </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Origen</th>
-                <th>Destino</th>
-                <th>Km</th>
-                <th>$/km</th>
-                <th>Costo ref.</th>
-                <th>Capacidad diaria</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sampleRoutes.map((route) => (
-                <tr key={`${route.origen}-${route.destino}`}>
-                  <td>{route.origen}</td>
-                  <td>{route.destino}</td>
-                  <td>{format(route.km)}</td>
-                  <td>{route.costoPorKm.toFixed(2)}</td>
-                  <td>${format(route.km * route.costoPorKm)}</td>
-                  <td>{format(dailyFleetCapacity)} t</td>
+        {routes.length === 0 ? (
+          <div className="empty-state">Carga datos con ubicaciones de tanque para ver las rutas.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="routes-table">
+              <thead>
+                <tr>
+                  <th>Origen</th>
+                  <th>Destino</th>
+                  <th>Km</th>
+                  <th>$/km</th>
+                  <th>Costo ref.</th>
+                  <th>Nodos</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {routes.map((route) => {
+                  const enabled = route.enabled !== false;
+                  return (
+                    <tr key={routeKey(route.origen, route.destino)} className={enabled ? "" : "route-off"}>
+                      <td>{route.origen}</td>
+                      <td>{route.destino}</td>
+                      <td>
+                        <input
+                          className="cell-input cell-input--num"
+                          type="number"
+                          min={0}
+                          value={route.km}
+                          onChange={(event) =>
+                            updateRoute(route.origen, route.destino, { km: Number(event.target.value) || 0 })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="cell-input cell-input--num"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={route.costoPorKm}
+                          onChange={(event) =>
+                            updateRoute(route.origen, route.destino, { costoPorKm: Number(event.target.value) || 0 })
+                          }
+                        />
+                      </td>
+                      <td>${format(route.km * route.costoPorKm)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className={`node-toggle ${enabled ? "on" : "off"}`}
+                          onClick={() => updateRoute(route.origen, route.destino, { enabled: !enabled })}
+                          title={enabled ? "Nodo habilitado" : "Nodo deshabilitado"}
+                          aria-pressed={enabled}
+                        >
+                          {enabled ? "✓" : "✗"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1243,4 +1400,8 @@ function sum(values: number[]) {
 
 function normalize(value: string) {
   return value.trim().toUpperCase();
+}
+
+function routeKey(origen: string, destino: string) {
+  return `${origen}|||${destino}`;
 }

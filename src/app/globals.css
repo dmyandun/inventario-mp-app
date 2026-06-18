@@ -544,6 +544,45 @@ button {
   margin-top: 10px;
 }
 
+.routes-table th,
+.routes-table td {
+  white-space: nowrap;
+}
+
+.routes-table .cell-input--num {
+  min-width: 72px;
+}
+
+.route-off td {
+  opacity: 0.5;
+}
+
+.node-toggle {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+}
+
+.node-toggle.on {
+  border-color: #4f7a3a;
+  background: #eaf3e3;
+  color: #2f5d1f;
+}
+
+.node-toggle.off {
+  border-color: #d98b8b;
+  background: #f7eaea;
+  color: #a23b3b;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;

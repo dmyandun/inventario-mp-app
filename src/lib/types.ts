@@ -31,6 +31,7 @@ export type RouteCost = {
   destino: string;
   km: number;
   costoPorKm: number;
+  enabled?: boolean;
 };
 
 export type DistributionStop = {

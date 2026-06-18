@@ -9,17 +9,29 @@ import {
 
 const refineryName = "DANEC SANGOLQUI";
 
-// Genera el plan de distribucion diario: despacha desde las EXTRACTORAS hacia la
-// refineria priorizando SIEMPRE primero la acidez alta (calidad) y, a igualdad de
-// acidez, la ocupacion mas copada (para liberar espacio). Asigna la flota en ese
-// orden hasta agotar la capacidad diaria, e informa toneladas, camiones y viajes.
-export function buildDistributionPlan(rows: InventoryRow[], fleet: FleetInput): DistributionPlan {
+// Genera el plan de distribucion diario: despacha desde las EXTRACTORAS y el
+// PUERTO hacia la refineria priorizando SIEMPRE primero la acidez alta (calidad)
+// y, a igualdad de acidez, la ocupacion mas copada (para liberar espacio). Asigna
+// la flota en ese orden hasta agotar la capacidad diaria.
+// enabledSources (opcional): nombres de nodos con ruta habilitada hacia la
+// refineria. Si se pasa, solo esos origenes son despachables.
+export function buildDistributionPlan(
+  rows: InventoryRow[],
+  fleet: FleetInput,
+  enabledSources?: Set<string>
+): DistributionPlan {
   const dailyCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   const tonsPerTrip = fleet.toneladasPorUnidad > 0 ? fleet.toneladasPorUnidad : 1;
   const tripsPerTruck = fleet.viajesPorDia > 0 ? fleet.viajesPorDia : 1;
 
+  const sourceTypes = new Set(["EXTRACTORA", "PUERTO"]);
   const candidates = rows
-    .filter((row) => normalize(row.tipo) === "EXTRACTORA" && row.disponible > 0)
+    .filter(
+      (row) =>
+        sourceTypes.has(normalize(row.tipo)) &&
+        row.disponible > 0 &&
+        (!enabledSources || enabledSources.has(row.nombre))
+    )
     .map((row) => {
       const occupancy = row.capacidad > 0 ? row.disponible / row.capacidad : 0;
       return { row, occupancy };
@@ -67,18 +79,29 @@ export function buildDistributionPlan(rows: InventoryRow[], fleet: FleetInput): 
   };
 }
 
-// Capacidad libre de la refineria por producto (suma de cap - disponible en los
-// tanques de DANEC). Sirve para validar que los despachos no excedan el espacio.
-export function getRefineryFreeCapacity(rows: InventoryRow[]) {
+// Capacidad libre por producto (suma de cap - disponible) de las filas que pasan
+// el filtro. Reutilizable para refineria y puerto.
+function freeCapacity(rows: InventoryRow[], keep: (row: InventoryRow) => boolean) {
   const byProduct: Record<string, number> = {};
   let total = 0;
   for (const row of rows) {
-    if (normalize(row.nombre) !== normalize(refineryName) || row.capacidad <= 0) continue;
+    if (row.capacidad <= 0 || !keep(row)) continue;
     const free = Math.max(0, row.capacidad - row.disponible);
     byProduct[row.producto] = (byProduct[row.producto] ?? 0) + free;
     total += free;
   }
   return { total, byProduct };
+}
+
+// Capacidad libre de la refineria (DANEC) por producto. Valida que los despachos
+// no excedan el espacio de la refineria.
+export function getRefineryFreeCapacity(rows: InventoryRow[]) {
+  return freeCapacity(rows, (row) => normalize(row.nombre) === normalize(refineryName));
+}
+
+// Capacidad libre del PUERTO por producto. Su almacenaje puede recibir transitos.
+export function getPuertoFreeCapacity(rows: InventoryRow[]) {
+  return freeCapacity(rows, (row) => normalize(row.tipo) === "PUERTO");
 }
 
 // Material entrante por producto: proveedores (pendienteRetiro), importaciones y

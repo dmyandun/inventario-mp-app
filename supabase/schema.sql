@@ -42,3 +42,24 @@ alter table inventario_mp_app_approved_dispatches enable row level security;
 -- La app accede SOLO desde rutas server-side (src/app/api/plan/route.ts) con la
 -- llave secreta de servidor: service_role clasica (JWT) o la nueva secret key
 -- (sb_secret_...). Ambas saltan RLS. La publishable/anon NO sirve para insertar.
+
+
+-- ============================================================================
+-- Matriz de rutas editable: km, $/km y on/off por par origen->destino.
+-- Una fila por combinacion origen->destino entre nodos con tanque.
+-- ============================================================================
+
+create table if not exists inventario_mp_app_routes (
+  id           uuid primary key default gen_random_uuid(),
+  origen       text not null,
+  destino      text not null,
+  km           numeric not null default 0,
+  costo_por_km numeric not null default 0,
+  enabled      boolean not null default true,
+  updated_at   timestamptz not null default now(),
+  unique (origen, destino)
+);
+
+-- Misma postura de seguridad: RLS sin politicas; acceso solo server-side con la
+-- llave secreta (src/app/api/routes/route.ts).
+alter table inventario_mp_app_routes enable row level security;
