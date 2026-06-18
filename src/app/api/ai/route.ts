@@ -34,7 +34,9 @@ export async function POST(request: Request) {
           model,
           stream: false,
           temperature: 0.2,
-          max_tokens: 520,
+          // Holgado: los modelos de razonamiento gastan tokens en <think> antes de
+          // la respuesta; con poco presupuesto se truncaban a mitad del razonamiento.
+          max_tokens: 1600,
           messages: [
             {
               role: "system",
@@ -95,9 +97,23 @@ function getModelChain() {
 function cleanAnswer(value: unknown) {
   if (typeof value !== "string") return "";
 
-  return value
+  let text = value;
+
+  // Modelos de razonamiento: la respuesta va DESPUES del ultimo cierre de
+  // <think>/<thinking>. Si existe, quedarse solo con lo posterior.
+  const closeMatch = text.match(/<\/think>|<\/thinking>/gi);
+  if (closeMatch) {
+    const lastClose = Math.max(text.lastIndexOf("</think>"), text.lastIndexOf("</thinking>"));
+    const tag = text.lastIndexOf("</thinking>") === lastClose ? "</thinking>" : "</think>";
+    text = text.slice(lastClose + tag.length);
+  }
+
+  return text
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+    // <think> sin cierre = respuesta truncada a mitad del razonamiento: descartar.
+    .replace(/<think(?:ing)?>[\s\S]*$/i, "")
+    .replace(/<\/?think(?:ing)?>/gi, "")
     .replace(/^\s*(analysis|reasoning|thought)\s*:\s*/gim, "")
     .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/__(.*?)__/g, "$1")
