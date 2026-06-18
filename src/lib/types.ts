@@ -34,10 +34,13 @@ export type RouteCost = {
   enabled?: boolean;
 };
 
+export type StationCapacity = Record<1 | 2 | 3, number>;
+
 export type DistributionStop = {
   origen: string;
   producto: string;
   tanque: string;
+  estacion: number;
   occupancy: number;
   acidez: number;
   urgency: number;

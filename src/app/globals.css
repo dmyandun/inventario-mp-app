@@ -573,6 +573,49 @@ button {
   white-space: nowrap;
 }
 
+.reception-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.reception-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcf8;
+}
+
+.reception-name {
+  font-weight: 700;
+  color: #344036;
+}
+
+.reception-products {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.reception-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.reception-input .cell-input--num {
+  min-width: 72px;
+}
+
+@media (max-width: 760px) {
+  .reception-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .routes-table .cell-input--num {
   min-width: 72px;
 }

@@ -5,64 +5,69 @@ import {
   FleetInput,
   InventoryRow,
   Recommendation,
-  RouteCost
+  RouteCost,
+  StationCapacity
 } from "./types";
 
 const refineryName = "DANEC SANGOLQUI";
 
-// Acidez >= a este umbral es "urgente": debe despacharse por calidad.
-const ACID_URGENT_THRESHOLD = 3;
-// Costo base por viaje: minimiza camiones cuando los costos monetarios empatan
-// (p. ej. rutas con $0). Negligible frente a costos reales (~cientos de $).
-const EPS_TRIP = 1;
-// Bono por acidez en el objetivo: como el total por producto es FIJO (target con
-// min=max), este bono solo decide QUE fuentes cubren ese total, no cuanto. Grande
-// para que la acidez alta se despache primero aunque su ruta sea mas cara.
-const ACID_BONUS = 1000;
+// Pesos del objetivo (maximizar uso de recepcion):
+const BASE = 1; // por tonelada: incentiva LLENAR la recepcion (evita horas extra fin de semana)
+const URGENT_BONUS = 1000; // por tonelada de fuente en el top 25% de acidez -> se despacha primero
+const ACID_W = 10; // afina el orden dentro del mismo grupo por acidez
+const EPS_COST = 0.0001; // desempate: a igualdad, prefiere ruta mas barata / menos viajes
 
 const sourceTypes = new Set(["EXTRACTORA", "PUERTO"]);
+
+// Cupos de recepcion por defecto (tanqueros/dia por estacion).
+export const DEFAULT_STATION_TANKERS: StationCapacity = { 1: 5, 2: 5, 3: 5 };
+
+// Cada estacion recibe solo ciertos productos (por conexion de tuberia). Ruteo por
+// nombre de producto en mayusculas. Productos sin estacion no pueden recibirse.
+export function stationFor(producto: string): 1 | 2 | 3 | 0 {
+  const p = producto.toUpperCase();
+  if (/HIBRIDO|ROJO DE PALMA|ESTEARINA/.test(p)) return 1;
+  if (/SOYA|CANOLA|GIRASOL|MA[IÍ]Z/.test(p)) return 2;
+  if (/PKO|PALMISTE/.test(p)) return 3;
+  return 0;
+}
 
 export type DistributionOptions = {
   enabledSources?: Set<string>;
   routeCost?: (origen: string, destino: string) => number;
+  stationTankers?: StationCapacity;
 };
 
 type Source = {
   row: InventoryRow;
   occupancy: number;
   costPerTrip: number;
+  estacion: 1 | 2 | 3;
+  urgent: boolean;
 };
 
-// Plan de distribucion diario como optimizacion de costo (MILP, javascript-lp-solver):
-// minimiza el costo de transporte (costo referencial de la matriz x viajes) usando
-// los MINIMOS camiones, sujeto a:
-//  - acidez urgente + espacio a liberar como objetivo MINIMO por producto (restriccion),
-//  - capacidad libre de la refineria por producto (tope),
-//  - limite de flota (camiones x viajes/dia).
-// No usa toda la flota si no hace falta.
+// Plan de distribucion diario (MILP, javascript-lp-solver). El cuello de botella es
+// la CAPACIDAD DE RECEPCION de la refineria: 3 estaciones, cada una recibe solo
+// ciertos productos y un cupo de tanqueros/dia. El plan LLENA la recepcion (para
+// explotarla entre semana) priorizando la acidez alta (top 25%) y minimizando costo,
+// sin exceder el almacenamiento libre de la refineria.
 export function buildDistributionPlan(
   rows: InventoryRow[],
   fleet: FleetInput,
   options: DistributionOptions = {}
 ): DistributionPlan {
-  const { enabledSources, routeCost } = options;
+  const { enabledSources, routeCost, stationTankers = DEFAULT_STATION_TANKERS } = options;
   const dailyCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   const truckCap = fleet.toneladasPorUnidad > 0 ? fleet.toneladasPorUnidad : 1;
   const tripsPerTruck = fleet.viajesPorDia > 0 ? fleet.viajesPorDia : 1;
-  const fleetTrips = fleet.unidades * tripsPerTruck;
 
-  const sources: Source[] = rows
-    .filter(
-      (row) =>
-        sourceTypes.has(normalize(row.tipo)) &&
-        row.disponible > 0 &&
-        (!enabledSources || enabledSources.has(row.nombre))
-    )
-    .map((row) => ({
-      row,
-      occupancy: row.capacidad > 0 ? row.disponible / row.capacidad : 0,
-      costPerTrip: routeCost ? Math.max(0, routeCost(row.nombre, refineryName)) : 0
-    }));
+  const candidates = rows.filter(
+    (row) =>
+      sourceTypes.has(normalize(row.tipo)) &&
+      row.disponible > 0 &&
+      (!enabledSources || enabledSources.has(row.nombre)) &&
+      stationFor(row.producto) !== 0
+  );
 
   const empty: DistributionPlan = {
     stops: [],
@@ -72,40 +77,23 @@ export function buildDistributionPlan(
     capacidadDiaria: dailyCapacity,
     costoTotal: 0
   };
-  if (sources.length === 0) return empty;
+  if (candidates.length === 0) return empty;
 
-  // Agregados por producto para objetivo (target) y tope (capacidad refineria).
+  // Acidez "urgente" = top 25% (percentil 75) de las fuentes del dia.
+  const p75 = percentile(candidates.map((row) => row.acidez), 0.75);
+
+  const sources: Source[] = candidates.map((row) => ({
+    row,
+    occupancy: row.capacidad > 0 ? row.disponible / row.capacidad : 0,
+    costPerTrip: routeCost ? Math.max(0, routeCost(row.nombre, refineryName)) : 0,
+    estacion: stationFor(row.producto) as 1 | 2 | 3,
+    urgent: row.acidez >= p75
+  }));
+
   const refineryFree = getRefineryFreeCapacity(rows).byProduct;
-  const incoming = getIncomingByProduct(rows).byProduct;
-  const freeStorageSources = freeCapacity(rows, (row) => sourceTypes.has(normalize(row.tipo))).byProduct;
-
   const products = Array.from(new Set(sources.map((source) => source.row.producto)));
-  const supplyByProduct: Record<string, number> = {};
-  const urgentByProduct: Record<string, number> = {};
-  for (const source of sources) {
-    const p = source.row.producto;
-    supplyByProduct[p] = (supplyByProduct[p] ?? 0) + source.row.disponible;
-    if (source.row.acidez >= ACID_URGENT_THRESHOLD) {
-      urgentByProduct[p] = (urgentByProduct[p] ?? 0) + source.row.disponible;
-    }
-  }
 
-  const targetByProduct: Record<string, number> = {};
-  for (const p of products) {
-    const refFree = refineryFree[p] ?? 0;
-    const spaceToFree = Math.max(0, (incoming[p] ?? 0) - (freeStorageSources[p] ?? 0));
-    const want = (urgentByProduct[p] ?? 0) + spaceToFree;
-    targetByProduct[p] = Math.min(want, refFree, supplyByProduct[p] ?? 0);
-  }
-
-  const result = solvePlan(sources, products, { refineryFree, targetByProduct, truckCap, fleetTrips, withTarget: true });
-  // Si el objetivo no cabe en flota/capacidad, relajar: priorizar acidez dentro
-  // de la flota disponible.
-  const solved =
-    result && result.feasible
-      ? result
-      : solvePlan(sources, products, { refineryFree, targetByProduct, truckCap, fleetTrips, withTarget: false });
-
+  const solved = solvePlan(sources, products, { refineryFree, truckCap, stationTankers });
   if (!solved || !solved.feasible) return empty;
 
   const stops: DistributionStop[] = [];
@@ -119,6 +107,7 @@ export function buildDistributionPlan(
       origen: source.row.nombre,
       producto: source.row.producto,
       tanque: source.row.tanque,
+      estacion: source.estacion,
       occupancy: source.occupancy,
       acidez: source.row.acidez,
       urgency: source.row.acidez,
@@ -128,8 +117,8 @@ export function buildDistributionPlan(
       costo: Math.round(source.costPerTrip * trips)
     });
   });
-  // Mayor acidez primero para lectura.
-  stops.sort((a, b) => b.acidez - a.acidez || b.toneladas - a.toneladas);
+  // Por estacion y luego mayor acidez para lectura.
+  stops.sort((a, b) => a.estacion - b.estacion || b.acidez - a.acidez || b.toneladas - a.toneladas);
 
   return {
     stops,
@@ -143,56 +132,41 @@ export function buildDistributionPlan(
 
 type SolveParams = {
   refineryFree: Record<string, number>;
-  targetByProduct: Record<string, number>;
   truckCap: number;
-  fleetTrips: number;
-  withTarget: boolean;
+  stationTankers: StationCapacity;
 };
 
-// Arma y resuelve el modelo MILP. withTarget=false relaja el objetivo minimo y en
-// su lugar maximiza acidez despachada (fallback de infactibilidad).
+// MILP: maximiza Σ w·tons (llenar recepcion, acidez top-25% primero) menos un
+// desempate de costo. Topes: disponible por fuente, almacenamiento libre por
+// producto, y cupo de tanqueros por estacion (el limite real de recepcion).
 function solvePlan(sources: Source[], products: string[], params: SolveParams) {
-  const { refineryFree, targetByProduct, truckCap, fleetTrips, withTarget } = params;
+  const { refineryFree, truckCap, stationTankers } = params;
   const variables: Record<string, Record<string, number>> = {};
   const ints: Record<string, 1> = {};
   const constraints: Record<string, { min?: number; max?: number }> = {
-    fleet: { max: fleetTrips }
+    station_1: { max: stationTankers[1] ?? 0 },
+    station_2: { max: stationTankers[2] ?? 0 },
+    station_3: { max: stationTankers[3] ?? 0 }
   };
 
   for (const p of products) {
     constraints[`refcap_${p}`] = { max: refineryFree[p] ?? 0 };
-    if (withTarget && (targetByProduct[p] ?? 0) > 0) {
-      // Total EXACTO por producto (min=max): no despachar de mas (minimiza
-      // camiones) y dejar que el bono de acidez elija las fuentes mas acidas.
-      constraints[`target_${p}`] = { min: targetByProduct[p], max: targetByProduct[p] };
-    }
   }
 
   sources.forEach((source, index) => {
     const p = source.row.producto;
-    const tonsVar: Record<string, number> = {
+    const weight = BASE + (source.urgent ? URGENT_BONUS : 0) + ACID_W * source.row.acidez;
+    variables[`tons_${index}`] = {
+      cost: weight,
       [`cap_${index}`]: 1,
       [`link_${index}`]: 1,
       [`refcap_${p}`]: 1
     };
-    if (constraints[`target_${p}`]) tonsVar[`target_${p}`] = 1;
-    const tripsVar: Record<string, number> = {
+    variables[`trips_${index}`] = {
+      cost: -EPS_COST * source.costPerTrip,
       [`link_${index}`]: -truckCap,
-      fleet: 1
+      [`station_${source.estacion}`]: 1
     };
-
-    if (withTarget) {
-      // Minimizar costo (+ base por viaje); bono pequeno de acidez como desempate.
-      tonsVar.cost = -ACID_BONUS * source.row.acidez;
-      tripsVar.cost = source.costPerTrip + EPS_TRIP;
-    } else {
-      // Fallback: maximizar acidez despachada, penalizando costo/viajes.
-      tonsVar.cost = source.row.acidez + 0.01;
-      tripsVar.cost = -(source.costPerTrip * 0.0001 + EPS_TRIP * 0.0001);
-    }
-
-    variables[`tons_${index}`] = tonsVar;
-    variables[`trips_${index}`] = tripsVar;
     constraints[`cap_${index}`] = { max: source.row.disponible };
     constraints[`link_${index}`] = { max: 0 };
     ints[`trips_${index}`] = 1;
@@ -200,7 +174,7 @@ function solvePlan(sources: Source[], products: string[], params: SolveParams) {
 
   const model = {
     optimize: "cost",
-    opType: (withTarget ? "min" : "max") as "min" | "max",
+    opType: "max" as const,
     constraints,
     variables,
     ints
@@ -211,6 +185,17 @@ function solvePlan(sources: Source[], products: string[], params: SolveParams) {
   } catch {
     return null;
   }
+}
+
+// Percentil (0..1) de una lista de numeros (interpolacion lineal). 0 si vacia.
+function percentile(values: number[], q: number) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const pos = (sorted.length - 1) * q;
+  const lower = Math.floor(pos);
+  const upper = Math.ceil(pos);
+  if (lower === upper) return sorted[lower];
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (pos - lower);
 }
 
 // Capacidad libre por producto (suma de cap - disponible) de las filas que pasan

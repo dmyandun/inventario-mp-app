@@ -24,14 +24,16 @@ import { parseInventoryWorkbook } from "@/lib/excel";
 import {
   buildDistributionPlan,
   buildRecommendations,
+  DEFAULT_STATION_TANKERS,
   getExtractoraStatus,
   getIncomingByProduct,
   getKpis,
   getPuertoFreeCapacity,
-  getRefineryFreeCapacity
+  getRefineryFreeCapacity,
+  stationFor
 } from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
-import { DistributionPlan, FleetInput, InventoryRow, RouteCost } from "@/lib/types";
+import { DistributionPlan, FleetInput, InventoryRow, RouteCost, StationCapacity } from "@/lib/types";
 
 type View = "inventario" | "rutas" | "ia";
 
@@ -217,6 +219,38 @@ export default function Home() {
     [routeOverrides]
   );
 
+  // Cupos de recepcion por estacion (tanqueros/dia), ajustables y persistidos en
+  // localStorage. Es el cuello de botella real del despacho diario.
+  const [stationTankers, setStationTankers] = useState<StationCapacity>(DEFAULT_STATION_TANKERS);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("inventario_mp_app_reception");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setStationTankers({
+          1: Number(parsed[1]) || 0,
+          2: Number(parsed[2]) || 0,
+          3: Number(parsed[3]) || 0
+        });
+      }
+    } catch {
+      // localStorage no disponible: se usan los valores por defecto.
+    }
+  }, []);
+
+  const updateStationTankers = useCallback((estacion: 1 | 2 | 3, value: number) => {
+    setStationTankers((prev) => {
+      const next = { ...prev, [estacion]: value };
+      try {
+        localStorage.setItem("inventario_mp_app_reception", JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
   // Origenes con ruta habilitada hacia la refineria (para el plan y la IA).
   const enabledSources = useMemo(
     () =>
@@ -239,8 +273,8 @@ export default function Home() {
   const enabledRoutes = routes.filter((route) => route.enabled !== false);
   const recommendations = buildRecommendations(currentRows, enabledRoutes, fleet);
   const distributionPlan = useMemo(
-    () => buildDistributionPlan(currentRows, fleet, { enabledSources, routeCost: routeCostRef }),
-    [currentRows, fleet, enabledSources, routeCostRef]
+    () => buildDistributionPlan(currentRows, fleet, { enabledSources, routeCost: routeCostRef, stationTankers }),
+    [currentRows, fleet, enabledSources, routeCostRef, stationTankers]
   );
   const dailyFleetCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   // Ocupacion de flota: toneladas asignadas por el plan diario vs. capacidad diaria.
@@ -298,6 +332,8 @@ export default function Home() {
         puertoFreeCapacity: getPuertoFreeCapacity(currentRows),
         incomingByProduct: getIncomingByProduct(currentRows),
         extractoraStatus: getExtractoraStatus(currentRows),
+        // Capacidad de recepcion: cupos de tanqueros/dia por estacion (cuello de botella).
+        stationTankers,
         distributionPlan,
         routes: enabledRoutes,
         topRecommendations: recommendations.slice(0, 8),
@@ -437,6 +473,8 @@ export default function Home() {
             saveRoutes={saveRoutes}
             routesSaveStatus={routesSaveStatus}
             routeCostRef={routeCostRef}
+            stationTankers={stationTankers}
+            updateStationTankers={updateStationTankers}
             dailyApproved={dailyApproved}
             askAi={askAi}
             onApproved={refreshTransported}
@@ -727,6 +765,8 @@ function RoutesView({
   saveRoutes,
   routesSaveStatus,
   routeCostRef,
+  stationTankers,
+  updateStationTankers,
   dailyApproved,
   askAi,
   onApproved
@@ -738,11 +778,13 @@ function RoutesView({
   saveRoutes: () => void;
   routesSaveStatus: string;
   routeCostRef: (origen: string, destino: string) => number;
+  stationTankers: StationCapacity;
+  updateStationTankers: (estacion: 1 | 2 | 3, value: number) => void;
   dailyApproved: DailyApproved[];
   askAi: (question: string) => void;
   onApproved: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   return (
     <section className="grid content-stack">
@@ -841,6 +883,8 @@ function RoutesView({
           ))}
       </div>
 
+      <ReceptionCapacityCard stationTankers={stationTankers} updateStationTankers={updateStationTankers} />
+
       <DistributionPlanCard
         plan={plan}
         fleet={fleet}
@@ -851,6 +895,52 @@ function RoutesView({
 
       <FleetCostChart daily={dailyApproved} />
     </section>
+  );
+}
+
+const STATIONS: { id: 1 | 2 | 3; nombre: string; productos: string }[] = [
+  { id: 1, nombre: "Estación 1", productos: "Híbrido · Rojo de palma · Estearina" },
+  { id: 2, nombre: "Estación 2", productos: "Soya · Canola · Girasol · Maíz" },
+  { id: 3, nombre: "Estación 3", productos: "PKO · Palmiste" }
+];
+
+function ReceptionCapacityCard({
+  stationTankers,
+  updateStationTankers
+}: {
+  stationTankers: StationCapacity;
+  updateStationTankers: (estacion: 1 | 2 | 3, value: number) => void;
+}) {
+  return (
+    <div className="card">
+      <div className="section-title">
+        <div>
+          <h3>Capacidad de recepción diaria</h3>
+          <p className="section-note">
+            Cupo de tanqueros/día por estación (cuello de botella del despacho). Cada estación recibe solo sus
+            productos. Aprovéchala entre semana para evitar horas extra el fin de semana.
+          </p>
+        </div>
+      </div>
+      <div className="reception-grid">
+        {STATIONS.map((station) => (
+          <label key={station.id} className="reception-item">
+            <span className="reception-name">{station.nombre}</span>
+            <span className="reception-products">{station.productos}</span>
+            <div className="reception-input">
+              <input
+                className="cell-input cell-input--num"
+                type="number"
+                min={0}
+                value={stationTankers[station.id] ?? 0}
+                onChange={(event) => updateStationTankers(station.id, Number(event.target.value) || 0)}
+              />
+              <span className="section-note">tanqueros/día</span>
+            </div>
+          </label>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1150,9 +1240,9 @@ function DistributionPlanCard({
         <div>
           <h3>Plan de distribución diario</h3>
           <p className="section-note">
-            Flota disponible: {format(fleet.unidades)} camiones · asignados {format(plan.camionesUsados)} (
-            {format(plan.toneladasTotales)} t) · costo total ${format(plan.costoTotal)}. Optimizado para mínimo costo;
-            ajusta y envía la orden.
+            Límite = capacidad de recepción por estación. Asignados {format(plan.camionesUsados)} tanqueros (
+            {format(plan.toneladasTotales)} t) · costo total ${format(plan.costoTotal)}. Prioriza acidez alta y mínimo
+            costo; ajusta y envía la orden.
           </p>
         </div>
         <button className="btn" onClick={() => askAi("Revisa el plan de distribucion diario y sugiere ajustes por ocupacion, acidez y flota.")}>
@@ -1169,6 +1259,7 @@ function DistributionPlanCard({
                 <tr>
                   <th>Partida</th>
                   <th>Producto</th>
+                  <th>Estación</th>
                   <th>Camiones</th>
                   <th>Toneladas</th>
                   <th>Destino</th>
@@ -1189,6 +1280,7 @@ function DistributionPlanCard({
                         />
                       </td>
                       <td>{stop.producto}</td>
+                      <td>E{stop.estacion}</td>
                       <td>{format(stop.camiones)}</td>
                       <td>
                         <input
@@ -1213,7 +1305,7 @@ function DistributionPlanCard({
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={2}>Total</td>
+                  <td colSpan={3}>Total</td>
                   <td>{format(plan.camionesUsados)}</td>
                   <td>{format(plan.toneladasTotales)} t</td>
                   <td />
