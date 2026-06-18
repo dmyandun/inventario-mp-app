@@ -1580,35 +1580,24 @@ function DistributionPlanCard({
     day: "numeric"
   });
 
-  // Version texto plano (sin HTML) para el cliente de correo via mailto. Arma una
-  // tabla ASCII alineada con las MISMAS columnas que el plan en la app (mailto no
-  // admite HTML; una tabla monoespaciada es lo mas cercano a la distribucion real).
+  // Cuerpo del correo (mailto, texto plano). Redactado legible en cualquier fuente
+  // (sin tabla ASCII que se rompe en clientes con fuente proporcional). Sin costo
+  // ni estacion (la estacion es una restriccion interna del solver).
   function buildPlainText() {
-    const headers = ["Partida", "Producto", "Estación", "Camiones", "Toneladas", "Destino", "Costo estimado"];
-    const bodyRows = orders.map(({ stop, fields, costo }) => [
-      fields.partida || stop.origen,
-      stop.producto,
-      stop.estacion,
-      String(stop.camiones),
-      `${fields.toneladas || "0"} t`,
-      fields.destino || refineryName,
-      `$${format(costo)}`
-    ]);
-    const totalRow = [
-      "TOTAL",
+    const lines = orders.map(({ stop, fields }, index) => {
+      return [
+        `${index + 1}. ${fields.partida || stop.origen}  ->  ${fields.destino || refineryName}`,
+        `   Producto: ${stop.producto}`,
+        `   Camiones: ${format(stop.camiones)}   Toneladas: ${fields.toneladas || "0"} t`
+      ].join("\n");
+    });
+    return [
+      `ORDEN DE DESPACHO - ${fechaTexto}`,
       "",
+      lines.join("\n\n"),
       "",
-      String(plan.camionesUsados),
-      `${format(plan.toneladasTotales)} t`,
-      "",
-      `$${format(costoTotal)}`
-    ];
-    const allRows = [headers, ...bodyRows, totalRow];
-    const widths = headers.map((_, col) => Math.max(...allRows.map((row) => row[col].length)));
-    const padRow = (row: string[]) => row.map((cell, col) => cell.padEnd(widths[col])).join(" | ");
-    const separator = widths.map((width) => "-".repeat(width)).join("-+-");
-    const lines = [padRow(headers), separator, ...bodyRows.map(padRow), separator, padRow(totalRow)];
-    return `ORDEN DE DESPACHO - ${fechaTexto}\n\n${lines.join("\n")}`;
+      `Total: ${format(plan.camionesUsados)} camiones · ${format(plan.toneladasTotales)} t`
+    ].join("\n");
   }
 
   // Abre el cliente de correo del usuario (mailto) con la orden ya redactada.
@@ -1696,7 +1685,6 @@ function DistributionPlanCard({
                 <tr>
                   <th>Partida</th>
                   <th>Producto</th>
-                  <th>Estación</th>
                   <th>Camiones</th>
                   <th>Toneladas</th>
                   <th>Destino</th>
@@ -1717,7 +1705,6 @@ function DistributionPlanCard({
                         />
                       </td>
                       <td>{stop.producto}</td>
-                      <td>{stop.estacion}</td>
                       <td>{format(stop.camiones)}</td>
                       <td>
                         <input
@@ -1742,7 +1729,7 @@ function DistributionPlanCard({
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={3}>Total</td>
+                  <td colSpan={2}>Total</td>
                   <td>{format(plan.camionesUsados)}</td>
                   <td>{format(plan.toneladasTotales)} t</td>
                   <td />
