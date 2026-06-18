@@ -52,6 +52,7 @@ export default function Home() {
     toneladasPorUnidad: 32,
     viajesPorDia: 1
   });
+  const [fleetSaveStatus, setFleetSaveStatus] = useState("");
   const [view, setView] = useState<View>("inventario");
   const [product, setProduct] = useState("TODOS");
   const [question, setQuestion] = useState("");
@@ -80,6 +81,72 @@ export default function Home() {
   useEffect(() => {
     refreshTransported();
   }, [refreshTransported]);
+
+  // Flota: dato COMPARTIDO. Supabase es la fuente de verdad (todos ven lo mismo);
+  // localStorage solo es respaldo si Supabase no responde y no pisa a Supabase.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/settings?key=fleet", { cache: "no-store" });
+        const data = await response.json();
+        if (!cancelled && data.ok && data.value && typeof data.value === "object") {
+          setFleet((prev) => ({
+            unidades: Number(data.value.unidades) || prev.unidades,
+            toneladasPorUnidad: Number(data.value.toneladasPorUnidad) || prev.toneladasPorUnidad,
+            viajesPorDia: Number(data.value.viajesPorDia) || prev.viajesPorDia
+          }));
+          return; // gana Supabase
+        }
+      } catch {
+        // sin Supabase
+      }
+      if (cancelled) return;
+      try {
+        const saved = localStorage.getItem("inventario_mp_app_fleet");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setFleet((prev) => ({
+            unidades: Number(parsed.unidades) || prev.unidades,
+            toneladasPorUnidad: Number(parsed.toneladasPorUnidad) || prev.toneladasPorUnidad,
+            viajesPorDia: Number(parsed.viajesPorDia) || prev.viajesPorDia
+          }));
+        }
+      } catch {
+        // localStorage no disponible
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveFleet = useCallback(async () => {
+    setFleetSaveStatus("Guardando…");
+    try {
+      localStorage.setItem("inventario_mp_app_fleet", JSON.stringify(fleet));
+    } catch {
+      // ignore
+    }
+    try {
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "fleet", value: fleet })
+      });
+      const data = await response.json();
+      const hora = new Date().toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" });
+      if (data.ok) {
+        setFleetSaveStatus(`Guardado con éxito a las ${hora}.`);
+      } else {
+        setFleetSaveStatus("Guardado local (configura Supabase para compartir entre usuarios).");
+      }
+      return true;
+    } catch {
+      setFleetSaveStatus("Guardado local (sin conexión a Supabase).");
+      return true;
+    }
+  }, [fleet]);
 
   // Matriz de rutas editable. routeOverrides guarda km/$/km/enabled por par
   // origen|||destino (sembrado del demo y luego mezclado con lo guardado en
@@ -175,11 +242,10 @@ export default function Home() {
     const keys = Array.from(dirtyRoutes.current);
     if (keys.length === 0) {
       setRoutesSaveStatus("No hay cambios por guardar.");
-      return;
+      return true;
     }
     setRoutesSaveStatus("Guardando…");
     try {
-      let okCount = 0;
       let failMessage = "";
       for (const key of keys) {
         const [origen, destino] = key.split("|||");
@@ -197,18 +263,21 @@ export default function Home() {
         });
         const data = await response.json();
         if (data.ok) {
-          okCount += 1;
           dirtyRoutes.current.delete(key);
         } else {
           failMessage = data.message ?? "No se pudo guardar.";
         }
       }
+      if (failMessage) {
+        setRoutesSaveStatus(failMessage);
+        return false;
+      }
       const hora = new Date().toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" });
-      setRoutesSaveStatus(
-        failMessage ? failMessage : `Guardado ${okCount} ruta(s) a las ${hora}.`
-      );
+      setRoutesSaveStatus(`Guardado con éxito a las ${hora}.`);
+      return true;
     } catch {
       setRoutesSaveStatus("Error de red al guardar.");
+      return false;
     }
   }, [routeOverrides]);
 
@@ -342,12 +411,14 @@ export default function Home() {
       if (data.ok) {
         dirtyStations.current = false;
         const hora = new Date().toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" });
-        setStationsSaveStatus(`Estaciones guardadas a las ${hora}.`);
-      } else {
-        setStationsSaveStatus(data.message ?? "No se pudo guardar.");
+        setStationsSaveStatus(`Guardado con éxito a las ${hora}.`);
+        return true;
       }
+      setStationsSaveStatus(data.message ?? "No se pudo guardar.");
+      return false;
     } catch {
       setStationsSaveStatus("Error de red al guardar.");
+      return false;
     }
   }, [stations]);
 
@@ -396,8 +467,9 @@ export default function Home() {
 
   async function askAi(customQuestion = question) {
     const finalQuestion = customQuestion.trim();
+    // Navega a IA de inmediato (el usuario ve "Analizando…" mientras responde).
+    setView("ia");
     if (!finalQuestion) {
-      setView("ia");
       return;
     }
 
@@ -413,7 +485,6 @@ export default function Home() {
       });
       const data = await response.json();
       setAnswer(data.answer);
-      setView("ia");
     } finally {
       setLoadingAi(false);
     }
@@ -498,9 +569,9 @@ export default function Home() {
           <h1>Inventario Nacional</h1>
         </div>
         <nav className="nav" aria-label="Principal">
+          <NavButton active={view === "datos"} onClick={() => setView("datos")} icon={<SlidersHorizontal size={18} />} label="Datos maestros" />
           <NavButton active={view === "inventario"} onClick={() => setView("inventario")} icon={<Database size={18} />} label="Inventario" />
           <NavButton active={view === "rutas"} onClick={() => setView("rutas")} icon={<Route size={18} />} label="Rutas" />
-          <NavButton active={view === "datos"} onClick={() => setView("datos")} icon={<SlidersHorizontal size={18} />} label="Datos maestros" />
           <NavButton active={view === "ia"} onClick={() => setView("ia")} icon={<Bot size={18} />} label="IA" />
         </nav>
         <div className="sidebar-note">
@@ -535,14 +606,16 @@ export default function Home() {
           </div>
         </section>
 
-        {view === "rutas" ? (
+        {view === "rutas" && (
           <section className="grid kpis">
             <Kpi icon={<PackageCheck size={19} />} label="Inventario transportado" value={`${format(totalTransportado ?? distributionPlan.toneladasTotales)} t`} />
             <Kpi icon={<Gauge size={19} />} label="Ocupación flota" value={`${(fleetOccupancy * 100).toFixed(1)}%`} />
             <Kpi icon={<AlertTriangle size={19} />} label="Acidez ponderada" value={`${kpis.weightedAcidity.toFixed(2)}%`} />
             <Kpi icon={<Truck size={19} />} label="Capacidad flota diaria" value={`${format(dailyFleetCapacity)} t`} />
           </section>
-        ) : (
+        )}
+
+        {view === "inventario" && (
           <section className="grid kpis">
             <Kpi icon={<PackageCheck size={19} />} label="Inventario neto" value={`${format(kpis.totalNetInventory)} t`} />
             <Kpi icon={<Gauge size={19} />} label="Ocupación nacional" value={`${(kpis.occupancy * 100).toFixed(1)}%`} />
@@ -578,6 +651,8 @@ export default function Home() {
           <DatosMaestrosView
             fleet={fleet}
             setFleet={setFleet}
+            saveFleet={saveFleet}
+            fleetSaveStatus={fleetSaveStatus}
             routes={routes}
             updateRoute={updateRoute}
             saveRoutes={saveRoutes}
@@ -867,6 +942,8 @@ function RoutesView({
 }) {
   return (
     <section className="grid content-stack">
+      <FleetCostChart daily={dailyApproved} />
+
       <DistributionPlanCard
         plan={plan}
         fleet={fleet}
@@ -874,8 +951,6 @@ function RoutesView({
         askAi={askAi}
         onApproved={onApproved}
       />
-
-      <FleetCostChart daily={dailyApproved} />
     </section>
   );
 }
@@ -883,6 +958,8 @@ function RoutesView({
 function DatosMaestrosView({
   fleet,
   setFleet,
+  saveFleet,
+  fleetSaveStatus,
   routes,
   updateRoute,
   saveRoutes,
@@ -899,9 +976,11 @@ function DatosMaestrosView({
 }: {
   fleet: FleetInput;
   setFleet: (value: FleetInput) => void;
+  saveFleet: () => Promise<boolean>;
+  fleetSaveStatus: string;
   routes: RouteCost[];
   updateRoute: (origen: string, destino: string, patch: Partial<RouteCost>) => void;
-  saveRoutes: () => void;
+  saveRoutes: () => Promise<boolean>;
   routesSaveStatus: string;
   stations: Station[];
   allProducts: string[];
@@ -910,12 +989,12 @@ function DatosMaestrosView({
   renameStation: (id: string, nombre: string) => void;
   updateStationTankers: (id: string, value: number) => void;
   assignProduct: (producto: string, stationId: string | null) => void;
-  saveStations: () => void;
+  saveStations: () => Promise<boolean>;
   stationsSaveStatus: string;
 }) {
   return (
     <section className="grid content-stack">
-      <FleetCard fleet={fleet} setFleet={setFleet} />
+      <FleetCard fleet={fleet} setFleet={setFleet} saveFleet={saveFleet} fleetSaveStatus={fleetSaveStatus} />
       <RoutesMatrixCard
         routes={routes}
         updateRoute={updateRoute}
@@ -937,55 +1016,93 @@ function DatosMaestrosView({
   );
 }
 
-function FleetCard({ fleet, setFleet }: { fleet: FleetInput; setFleet: (value: FleetInput) => void }) {
+function FleetCard({
+  fleet,
+  setFleet,
+  saveFleet,
+  fleetSaveStatus
+}: {
+  fleet: FleetInput;
+  setFleet: (value: FleetInput) => void;
+  saveFleet: () => Promise<boolean>;
+  fleetSaveStatus: string;
+}) {
+  const [collapsed, setCollapsed] = useState(true);
   const dailyCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
+
+  async function handleSave() {
+    const ok = await saveFleet();
+    if (ok) setCollapsed(true);
+  }
+
   return (
     <div className="card">
       <div className="section-title">
-        <div>
-          <h3>Flota disponible</h3>
-          <p className="section-note">
-            Número de transportes y toneladas por transporte. Capacidad diaria = transportes × toneladas × viajes/día.
-          </p>
+        <button
+          type="button"
+          className="collapse-title"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+          <div>
+            <h3>Flota disponible</h3>
+            {!collapsed && (
+              <p className="section-note">
+                Número de transportes y toneladas por transporte. Capacidad diaria = transportes × toneladas ×
+                viajes/día.
+              </p>
+            )}
+          </div>
+        </button>
+        <div className="routes-save">
+          {fleetSaveStatus && <span className="section-note">{fleetSaveStatus}</span>}
+          {!collapsed && (
+            <button className="btn primary" onClick={handleSave}>
+              <Save size={16} /> Guardar
+            </button>
+          )}
         </div>
       </div>
-      <div className="reception-grid">
-        <label className="reception-item">
-          <span className="reception-name">Número de transportes</span>
-          <span className="reception-products">Tanqueros disponibles en la flota</span>
-          <div className="reception-input">
-            <input
-              className="cell-input cell-input--num"
-              type="number"
-              min={0}
-              value={fleet.unidades}
-              onChange={(event) => setFleet({ ...fleet, unidades: Number(event.target.value) || 0 })}
-            />
-            <span className="section-note">tanqueros</span>
-          </div>
-        </label>
-        <label className="reception-item">
-          <span className="reception-name">Toneladas por transporte</span>
-          <span className="reception-products">Carga de cada tanquero</span>
-          <div className="reception-input">
-            <input
-              className="cell-input cell-input--num"
-              type="number"
-              min={0}
-              value={fleet.toneladasPorUnidad}
-              onChange={(event) => setFleet({ ...fleet, toneladasPorUnidad: Number(event.target.value) || 0 })}
-            />
-            <span className="section-note">t/tanquero</span>
-          </div>
-        </label>
-        <div className="reception-item">
-          <span className="reception-name">Capacidad diaria</span>
-          <span className="reception-products">Transportes × toneladas × viajes</span>
-          <div className="reception-input">
-            <strong>{format(dailyCapacity)} t</strong>
+      {!collapsed && (
+        <div className="reception-grid">
+          <label className="reception-item">
+            <span className="reception-name">Número de transportes</span>
+            <span className="reception-products">Tanqueros disponibles en la flota</span>
+            <div className="reception-input">
+              <input
+                className="cell-input cell-input--num"
+                type="number"
+                min={0}
+                value={fleet.unidades}
+                onChange={(event) => setFleet({ ...fleet, unidades: Number(event.target.value) || 0 })}
+              />
+              <span className="section-note">tanqueros</span>
+            </div>
+          </label>
+          <label className="reception-item">
+            <span className="reception-name">Toneladas por transporte</span>
+            <span className="reception-products">Carga de cada tanquero</span>
+            <div className="reception-input">
+              <input
+                className="cell-input cell-input--num"
+                type="number"
+                min={0}
+                value={fleet.toneladasPorUnidad}
+                onChange={(event) => setFleet({ ...fleet, toneladasPorUnidad: Number(event.target.value) || 0 })}
+              />
+              <span className="section-note">t/tanquero</span>
+            </div>
+          </label>
+          <div className="reception-item">
+            <span className="reception-name">Capacidad diaria</span>
+            <span className="reception-products">Transportes × toneladas × viajes</span>
+            <div className="reception-input">
+              <strong>{format(dailyCapacity)} t</strong>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -998,10 +1115,15 @@ function RoutesMatrixCard({
 }: {
   routes: RouteCost[];
   updateRoute: (origen: string, destino: string, patch: Partial<RouteCost>) => void;
-  saveRoutes: () => void;
+  saveRoutes: () => Promise<boolean>;
   routesSaveStatus: string;
 }) {
   const [collapsed, setCollapsed] = useState(true);
+
+  async function handleSave() {
+    const ok = await saveRoutes();
+    if (ok) setCollapsed(true);
+  }
 
   return (
     <div className="card">
@@ -1023,14 +1145,14 @@ function RoutesMatrixCard({
             )}
           </div>
         </button>
-        {!collapsed && (
-          <div className="routes-save">
-            {routesSaveStatus && <span className="section-note">{routesSaveStatus}</span>}
-            <button className="btn primary" onClick={saveRoutes}>
+        <div className="routes-save">
+          {routesSaveStatus && <span className="section-note">{routesSaveStatus}</span>}
+          {!collapsed && (
+            <button className="btn primary" onClick={handleSave}>
               <Save size={16} /> Guardar
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       {!collapsed &&
         (routes.length === 0 ? (
@@ -1119,10 +1241,10 @@ function StationsCard({
   renameStation: (id: string, nombre: string) => void;
   updateStationTankers: (id: string, value: number) => void;
   assignProduct: (producto: string, stationId: string | null) => void;
-  saveStations: () => void;
+  saveStations: () => Promise<boolean>;
   stationsSaveStatus: string;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [dragProduct, setDragProduct] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -1133,6 +1255,11 @@ function StationsCard({
     if (dragProduct) assignProduct(dragProduct, stationId);
     setDragProduct(null);
     setOverId(null);
+  }
+
+  async function handleSave() {
+    const ok = await saveStations();
+    if (ok) setCollapsed(true);
   }
 
   return (
@@ -1156,17 +1283,19 @@ function StationsCard({
             )}
           </div>
         </button>
-        {!collapsed && (
-          <div className="routes-save">
-            {stationsSaveStatus && <span className="section-note">{stationsSaveStatus}</span>}
-            <button className="btn" onClick={addStation}>
-              <Plus size={16} /> Agregar estación
-            </button>
-            <button className="btn primary" onClick={saveStations}>
-              <Save size={16} /> Guardar
-            </button>
-          </div>
-        )}
+        <div className="routes-save">
+          {stationsSaveStatus && <span className="section-note">{stationsSaveStatus}</span>}
+          {!collapsed && (
+            <>
+              <button className="btn" onClick={addStation}>
+                <Plus size={16} /> Agregar estación
+              </button>
+              <button className="btn primary" onClick={handleSave}>
+                <Save size={16} /> Guardar
+              </button>
+            </>
+          )}
+        </div>
       </div>
       {!collapsed && (
         <>
@@ -1402,8 +1531,6 @@ function DistributionPlanCard({
   onApproved: () => void;
 }) {
   const [edits, setEdits] = useState<Record<string, DispatchFields>>({});
-  const [emailTo, setEmailTo] = useState("");
-  const [sending, setSending] = useState<"telegram" | "email" | null>(null);
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
   const [status, setStatus] = useState("");
@@ -1443,17 +1570,6 @@ function DistributionPlanCard({
     day: "numeric"
   });
 
-  function buildText() {
-    const lines = orders.map(({ stop, fields, costo }, index) => {
-      return [
-        `<b>${index + 1}. ${fields.partida || stop.origen} → ${fields.destino || refineryName}</b>`,
-        `Producto: ${stop.producto} · ${fields.toneladas || "0"} t`,
-        `Costo estimado: $${format(costo)}`
-      ].join("\n");
-    });
-    return `<b>🚚 ORDEN DE DESPACHO – ${fechaTexto}</b>\n\n${lines.join("\n\n")}`;
-  }
-
   // Version texto plano (sin HTML) para el cliente de correo via mailto.
   function buildPlainText() {
     const lines = orders.map(({ stop, fields, costo }, index) => {
@@ -1469,76 +1585,11 @@ function DistributionPlanCard({
   }
 
   // Abre el cliente de correo del usuario (mailto) con la orden ya redactada.
+  // Sin destinatario fijo: el usuario elige a quien enviarla en su cliente.
   function openMailto() {
     const asunto = encodeURIComponent(`Orden de despacho - ${fechaTexto}`);
     const cuerpo = encodeURIComponent(buildPlainText());
-    const destino = encodeURIComponent(emailTo.trim());
-    window.location.href = `mailto:${destino}?subject=${asunto}&body=${cuerpo}`;
-  }
-
-  function buildHtml() {
-    const rowsHtml = orders
-      .map(
-        ({ stop, fields, costo }, index) => `
-        <tr>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${index + 1}</td>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.partida || stop.origen}</td>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${fields.destino || refineryName}</td>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;">${stop.producto}</td>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;text-align:right;">${fields.toneladas || "0"} t</td>
-          <td style="padding:6px 10px;border:1px solid #d9e0d4;text-align:right;">$${format(costo)}</td>
-        </tr>`
-      )
-      .join("");
-    return `
-      <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2a20;">
-        <h2 style="margin:0 0 12px;">🚚 Orden de despacho – ${fechaTexto}</h2>
-        <table style="border-collapse:collapse;font-size:14px;">
-          <thead>
-            <tr style="background:#eef3e9;">
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">#</th>
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Partida</th>
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Destino</th>
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Producto</th>
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Toneladas</th>
-              <th style="padding:6px 10px;border:1px solid #d9e0d4;">Costo estimado</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-      </div>`;
-  }
-
-  async function send(channel: "telegram" | "email") {
-    if (orders.length === 0) return;
-    setSending(channel);
-    setStatus("Enviando…");
-    try {
-      const endpoint = channel === "telegram" ? "/api/telegram" : "/api/email";
-      const payload =
-        channel === "telegram"
-          ? { text: buildText() }
-          : {
-              subject: `Orden de despacho – ${fechaTexto}`,
-              html: buildHtml(),
-              to: emailTo.trim()
-            };
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      const data = await response.json();
-      if (data.ok) {
-        setStatus(channel === "telegram" ? "Orden enviada por Telegram." : "Orden enviada por correo.");
-      } else {
-        setStatus(data.message ?? "No se pudo enviar la orden.");
-      }
-    } catch {
-      setStatus("Error de red al enviar la orden.");
-    } finally {
-      setSending(null);
-    }
+    window.location.href = `mailto:?subject=${asunto}&body=${cuerpo}`;
   }
 
   // Aprueba el plan: guarda los despachos en Supabase y los cuenta como
@@ -1584,7 +1635,7 @@ function DistributionPlanCard({
     }
   }
 
-  const busy = approving || sending !== null;
+  const busy = approving;
 
   return (
     <div className="card">
@@ -1594,11 +1645,18 @@ function DistributionPlanCard({
           <p className="section-note">
             Límite = capacidad de recepción por estación. Asignados {format(plan.camionesUsados)} tanqueros (
             {format(plan.toneladasTotales)} t) · costo total ${format(plan.costoTotal)}. Prioriza acidez alta y mínimo
-            costo; ajusta y envía la orden.
+            costo; aprueba y abre la orden en tu correo.
           </p>
         </div>
-        <button className="btn" onClick={() => askAi("Revisa el plan de distribucion diario y sugiere ajustes por ocupacion, acidez y flota.")}>
-          <Bot size={16} /> Revisar
+        <button
+          className="btn"
+          onClick={() =>
+            askAi(
+              "Explica por que se propone este plan de distribucion diario. Justifica cada despacho por: acidez (los del top 25% entran primero), costo de ruta (a igualdad, la mas barata) y cupo de recepcion por estacion. Indica que llena cada estacion, por que ese origen y no otro, y senala riesgos o cuellos de botella."
+            )
+          }
+        >
+          <Bot size={16} /> Revisar con IA
         </button>
       </div>
       {plan.stops.length === 0 ? (
@@ -1667,25 +1725,12 @@ function DistributionPlanCard({
             </table>
           </div>
           <div className="dispatch-send">
-            <input
-              className="cell-input dispatch-email"
-              type="email"
-              placeholder="Correo destino (opcional si ya está configurado)"
-              value={emailTo}
-              onChange={(event) => setEmailTo(event.target.value)}
-            />
             <div className="dispatch-actions">
-              <button className="btn" onClick={() => send("telegram")} disabled={busy}>
-                <Send size={16} /> {sending === "telegram" ? "Enviando…" : "Enviar por Telegram"}
-              </button>
-              <button className="btn" onClick={() => send("email")} disabled={busy}>
-                <Send size={16} /> {sending === "email" ? "Enviando…" : "Enviar por correo"}
-              </button>
               <button className="btn primary" onClick={approve} disabled={busy}>
                 <CheckCircle2 size={16} /> {approving ? "Aprobando…" : "Aprobar plan"}
               </button>
               {approved && (
-                <button className="btn mailto-btn" onClick={openMailto} title="Abrir en tu cliente de correo">
+                <button className="btn mailto-btn" onClick={openMailto} title="Abrir la orden en tu cliente de correo">
                   <Mail size={16} /> Abrir en correo
                 </button>
               )}

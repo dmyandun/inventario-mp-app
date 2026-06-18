@@ -87,3 +87,20 @@ create table if not exists inventario_mp_app_stations (
 -- Misma postura de seguridad: RLS sin politicas; acceso solo server-side con la
 -- llave secreta (src/app/api/stations/route.ts).
 alter table inventario_mp_app_stations enable row level security;
+
+
+-- ============================================================================
+-- Configuraciones sueltas compartidas (clave -> valor JSON). Hoy guarda la
+-- flota (key='fleet': numero de transportes y toneladas por transporte) para
+-- que todos los usuarios vean la misma informacion. Fuente de verdad compartida.
+-- ============================================================================
+
+create table if not exists inventario_mp_app_settings (
+  key         text primary key,
+  value       jsonb not null default '{}'::jsonb,
+  updated_at  timestamptz not null default now()
+);
+
+-- Misma postura de seguridad: RLS sin politicas; acceso solo server-side con la
+-- llave secreta (src/app/api/settings/route.ts).
+alter table inventario_mp_app_settings enable row level security;

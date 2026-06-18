@@ -107,6 +107,7 @@ button {
   padding: 26px;
   display: grid;
   gap: 20px;
+  align-content: start;
 }
 
 .topbar {
