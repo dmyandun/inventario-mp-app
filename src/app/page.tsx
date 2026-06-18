@@ -10,11 +10,15 @@ import {
   FileSpreadsheet,
   Gauge,
   LineChart,
+  Mail,
   PackageCheck,
+  Plus,
   Route,
   Save,
   Send,
+  SlidersHorizontal,
   Sparkles,
+  Trash2,
   Truck,
   X
 } from "lucide-react";
@@ -24,18 +28,17 @@ import { parseInventoryWorkbook } from "@/lib/excel";
 import {
   buildDistributionPlan,
   buildRecommendations,
-  DEFAULT_STATION_TANKERS,
+  defaultStationSeed,
   getExtractoraStatus,
   getIncomingByProduct,
   getKpis,
   getPuertoFreeCapacity,
-  getRefineryFreeCapacity,
-  stationFor
+  getRefineryFreeCapacity
 } from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
-import { DistributionPlan, FleetInput, InventoryRow, RouteCost, StationCapacity } from "@/lib/types";
+import { DistributionPlan, FleetInput, InventoryRow, RouteCost, Station } from "@/lib/types";
 
-type View = "inventario" | "rutas" | "ia";
+type View = "inventario" | "datos" | "rutas" | "ia";
 
 type DailyApproved = { fecha: string; camiones: number; costo: number; toneladas: number };
 
@@ -219,37 +222,134 @@ export default function Home() {
     [routeOverrides]
   );
 
-  // Cupos de recepcion por estacion (tanqueros/dia), ajustables y persistidos en
-  // localStorage. Es el cuello de botella real del despacho diario.
-  const [stationTankers, setStationTankers] = useState<StationCapacity>(DEFAULT_STATION_TANKERS);
+  // Todos los productos del inventario (sin filtro), para asignarlos a estaciones.
+  const allProducts = useMemo(
+    () => Array.from(new Set(rows.map((row) => row.producto))).sort(),
+    [rows]
+  );
+
+  // Estaciones de recepcion (cuello de botella del despacho). Configurables:
+  // nombre, cupo de tanqueros/dia y productos asignados (arrastrables). Semilla
+  // por keyword; se sobreescribe con lo guardado en Supabase / localStorage.
+  const [stations, setStations] = useState<Station[]>(() =>
+    defaultStationSeed(Array.from(new Set(sampleInventory.map((row) => row.producto))))
+  );
+  const dirtyStations = useRef(false);
+  const [stationsSaveStatus, setStationsSaveStatus] = useState("");
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("inventario_mp_app_reception");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setStationTankers({
-          1: Number(parsed[1]) || 0,
-          2: Number(parsed[2]) || 0,
-          3: Number(parsed[3]) || 0
-        });
+    let cancelled = false;
+    (async () => {
+      // Supabase primero; si no hay, localStorage; si tampoco, se queda la semilla.
+      try {
+        const response = await fetch("/api/stations", { cache: "no-store" });
+        const data = await response.json();
+        if (!cancelled && data.ok && Array.isArray(data.stations) && data.stations.length > 0) {
+          setStations(data.stations.map(normalizeStation));
+          return;
+        }
+      } catch {
+        // sin Supabase
       }
+      if (cancelled) return;
+      try {
+        const saved = localStorage.getItem("inventario_mp_app_stations");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setStations(parsed.map(normalizeStation));
+          }
+        }
+      } catch {
+        // localStorage no disponible
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistStationsLocal = useCallback((next: Station[]) => {
+    try {
+      localStorage.setItem("inventario_mp_app_stations", JSON.stringify(next));
     } catch {
-      // localStorage no disponible: se usan los valores por defecto.
+      // ignore
     }
   }, []);
 
-  const updateStationTankers = useCallback((estacion: 1 | 2 | 3, value: number) => {
-    setStationTankers((prev) => {
-      const next = { ...prev, [estacion]: value };
-      try {
-        localStorage.setItem("inventario_mp_app_reception", JSON.stringify(next));
-      } catch {
-        // ignore
+  const mutateStations = useCallback(
+    (updater: (prev: Station[]) => Station[]) => {
+      dirtyStations.current = true;
+      setStationsSaveStatus("Cambios sin guardar");
+      setStations((prev) => {
+        const next = updater(prev);
+        persistStationsLocal(next);
+        return next;
+      });
+    },
+    [persistStationsLocal]
+  );
+
+  const addStation = useCallback(() => {
+    mutateStations((prev) => [
+      ...prev,
+      { id: `est-${Date.now()}`, nombre: `Estación ${prev.length + 1}`, tankers: 5, productos: [] }
+    ]);
+  }, [mutateStations]);
+
+  const removeStation = useCallback(
+    (id: string) => mutateStations((prev) => prev.filter((station) => station.id !== id)),
+    [mutateStations]
+  );
+
+  const renameStation = useCallback(
+    (id: string, nombre: string) =>
+      mutateStations((prev) => prev.map((station) => (station.id === id ? { ...station, nombre } : station))),
+    [mutateStations]
+  );
+
+  const updateStationTankers = useCallback(
+    (id: string, tankers: number) =>
+      mutateStations((prev) => prev.map((station) => (station.id === id ? { ...station, tankers } : station))),
+    [mutateStations]
+  );
+
+  // Asigna un producto a una estacion (o lo deja sin asignar si stationId = null).
+  // Lo quita de cualquier otra estacion (un producto va a una sola estacion).
+  const assignProduct = useCallback(
+    (producto: string, stationId: string | null) =>
+      mutateStations((prev) =>
+        prev.map((station) => ({
+          ...station,
+          productos:
+            station.id === stationId
+              ? Array.from(new Set([...station.productos, producto]))
+              : station.productos.filter((item) => item !== producto)
+        }))
+      ),
+    [mutateStations]
+  );
+
+  const saveStations = useCallback(async () => {
+    setStationsSaveStatus("Guardando…");
+    try {
+      const response = await fetch("/api/stations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stations })
+      });
+      const data = await response.json();
+      if (data.ok) {
+        dirtyStations.current = false;
+        const hora = new Date().toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" });
+        setStationsSaveStatus(`Estaciones guardadas a las ${hora}.`);
+      } else {
+        setStationsSaveStatus(data.message ?? "No se pudo guardar.");
       }
-      return next;
-    });
-  }, []);
+    } catch {
+      setStationsSaveStatus("Error de red al guardar.");
+    }
+  }, [stations]);
 
   // Origenes con ruta habilitada hacia la refineria (para el plan y la IA).
   const enabledSources = useMemo(
@@ -273,8 +373,8 @@ export default function Home() {
   const enabledRoutes = routes.filter((route) => route.enabled !== false);
   const recommendations = buildRecommendations(currentRows, enabledRoutes, fleet);
   const distributionPlan = useMemo(
-    () => buildDistributionPlan(currentRows, fleet, { enabledSources, routeCost: routeCostRef, stationTankers }),
-    [currentRows, fleet, enabledSources, routeCostRef, stationTankers]
+    () => buildDistributionPlan(currentRows, fleet, { enabledSources, routeCost: routeCostRef, stations }),
+    [currentRows, fleet, enabledSources, routeCostRef, stations]
   );
   const dailyFleetCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   // Ocupacion de flota: toneladas asignadas por el plan diario vs. capacidad diaria.
@@ -332,8 +432,8 @@ export default function Home() {
         puertoFreeCapacity: getPuertoFreeCapacity(currentRows),
         incomingByProduct: getIncomingByProduct(currentRows),
         extractoraStatus: getExtractoraStatus(currentRows),
-        // Capacidad de recepcion: cupos de tanqueros/dia por estacion (cuello de botella).
-        stationTankers,
+        // Capacidad de recepcion: estaciones configurables (productos + cupo/dia).
+        stations,
         distributionPlan,
         routes: enabledRoutes,
         topRecommendations: recommendations.slice(0, 8),
@@ -400,6 +500,7 @@ export default function Home() {
         <nav className="nav" aria-label="Principal">
           <NavButton active={view === "inventario"} onClick={() => setView("inventario")} icon={<Database size={18} />} label="Inventario" />
           <NavButton active={view === "rutas"} onClick={() => setView("rutas")} icon={<Route size={18} />} label="Rutas" />
+          <NavButton active={view === "datos"} onClick={() => setView("datos")} icon={<SlidersHorizontal size={18} />} label="Datos maestros" />
           <NavButton active={view === "ia"} onClick={() => setView("ia")} icon={<Bot size={18} />} label="IA" />
         </nav>
         <div className="sidebar-note">
@@ -456,8 +557,6 @@ export default function Home() {
             products={products}
             product={product}
             setProduct={setProduct}
-            fleet={fleet}
-            setFleet={setFleet}
             history={inventoryHistory}
             heatmap={locationHeatmap}
             dataSource={dataSource}
@@ -468,16 +567,30 @@ export default function Home() {
           <RoutesView
             plan={distributionPlan}
             fleet={fleet}
+            routeCostRef={routeCostRef}
+            dailyApproved={dailyApproved}
+            askAi={askAi}
+            onApproved={refreshTransported}
+          />
+        )}
+
+        {view === "datos" && (
+          <DatosMaestrosView
+            fleet={fleet}
+            setFleet={setFleet}
             routes={routes}
             updateRoute={updateRoute}
             saveRoutes={saveRoutes}
             routesSaveStatus={routesSaveStatus}
-            routeCostRef={routeCostRef}
-            stationTankers={stationTankers}
+            stations={stations}
+            allProducts={allProducts}
+            addStation={addStation}
+            removeStation={removeStation}
+            renameStation={renameStation}
             updateStationTankers={updateStationTankers}
-            dailyApproved={dailyApproved}
-            askAi={askAi}
-            onApproved={refreshTransported}
+            assignProduct={assignProduct}
+            saveStations={saveStations}
+            stationsSaveStatus={stationsSaveStatus}
           />
         )}
 
@@ -510,8 +623,6 @@ function InventoryView({
   products,
   product,
   setProduct,
-  fleet,
-  setFleet,
   history,
   heatmap,
   dataSource
@@ -520,8 +631,6 @@ function InventoryView({
   products: string[];
   product: string;
   setProduct: (value: string) => void;
-  fleet: FleetInput;
-  setFleet: (value: FleetInput) => void;
   history: ReturnType<typeof buildInventoryHistory>;
   heatmap: ReturnType<typeof buildLocationHeatmap>;
   dataSource: "demo" | "excel";
@@ -539,22 +648,6 @@ function InventoryView({
                   <option key={item}>{item}</option>
                 ))}
               </select>
-              <input
-                type="number"
-                min="0"
-                value={fleet.unidades}
-                onChange={(event) => setFleet({ ...fleet, unidades: Number(event.target.value) })}
-                aria-label="Unidades de flota"
-                title="Unidades de flota"
-              />
-              <input
-                type="number"
-                min="0"
-                value={fleet.toneladasPorUnidad}
-                onChange={(event) => setFleet({ ...fleet, toneladasPorUnidad: Number(event.target.value) })}
-                aria-label="Toneladas por unidad"
-                title="Toneladas por unidad"
-              />
             </div>
           </div>
           <InventoryTable rows={rows} />
@@ -760,131 +853,20 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
 function RoutesView({
   plan,
   fleet,
-  routes,
-  updateRoute,
-  saveRoutes,
-  routesSaveStatus,
   routeCostRef,
-  stationTankers,
-  updateStationTankers,
   dailyApproved,
   askAi,
   onApproved
 }: {
   plan: DistributionPlan;
   fleet: FleetInput;
-  routes: RouteCost[];
-  updateRoute: (origen: string, destino: string, patch: Partial<RouteCost>) => void;
-  saveRoutes: () => void;
-  routesSaveStatus: string;
   routeCostRef: (origen: string, destino: string) => number;
-  stationTankers: StationCapacity;
-  updateStationTankers: (estacion: 1 | 2 | 3, value: number) => void;
   dailyApproved: DailyApproved[];
   askAi: (question: string) => void;
   onApproved: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(true);
-
   return (
     <section className="grid content-stack">
-      <div className="card">
-        <div className="section-title">
-          <button
-            type="button"
-            className="collapse-title"
-            onClick={() => setCollapsed((value) => !value)}
-            aria-expanded={!collapsed}
-          >
-            {collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
-            <div>
-              <h3>Matriz de rutas</h3>
-              {!collapsed && (
-                <p className="section-note">
-                  Edita km y $/km (costo ref. = km × $/km), input del plan. El check habilita o
-                  deshabilita cada nodo. Guarda para persistir en Supabase.
-                </p>
-              )}
-            </div>
-          </button>
-          {!collapsed && (
-            <div className="routes-save">
-              {routesSaveStatus && <span className="section-note">{routesSaveStatus}</span>}
-              <button className="btn primary" onClick={saveRoutes}>
-                <Save size={16} /> Guardar
-              </button>
-            </div>
-          )}
-        </div>
-        {!collapsed &&
-          (routes.length === 0 ? (
-            <div className="empty-state">Carga datos con ubicaciones de tanque para ver las rutas.</div>
-          ) : (
-            <div className="table-wrap">
-              <table className="routes-table">
-                <thead>
-                  <tr>
-                    <th>Origen</th>
-                    <th>Destino</th>
-                    <th>Km</th>
-                    <th>$/km</th>
-                    <th>Costo ref.</th>
-                    <th>Nodos</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {routes.map((route) => {
-                    const enabled = route.enabled !== false;
-                    return (
-                      <tr key={routeKey(route.origen, route.destino)} className={enabled ? "" : "route-off"}>
-                        <td>{route.origen}</td>
-                        <td>{route.destino}</td>
-                        <td>
-                          <input
-                            className="cell-input cell-input--num"
-                            type="number"
-                            min={0}
-                            value={route.km}
-                            onChange={(event) =>
-                              updateRoute(route.origen, route.destino, { km: Number(event.target.value) || 0 })
-                            }
-                          />
-                        </td>
-                        <td>
-                          <input
-                            className="cell-input cell-input--num"
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={route.costoPorKm}
-                            onChange={(event) =>
-                              updateRoute(route.origen, route.destino, { costoPorKm: Number(event.target.value) || 0 })
-                            }
-                          />
-                        </td>
-                        <td>${format(route.km * route.costoPorKm)}</td>
-                        <td>
-                          <button
-                            type="button"
-                            className={`node-toggle ${enabled ? "on" : "off"}`}
-                            onClick={() => updateRoute(route.origen, route.destino, { enabled: !enabled })}
-                            title={enabled ? "Nodo habilitado" : "Nodo deshabilitado"}
-                            aria-pressed={enabled}
-                          >
-                            {enabled ? "✓" : "✗"}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ))}
-      </div>
-
-      <ReceptionCapacityCard stationTankers={stationTankers} updateStationTankers={updateStationTankers} />
-
       <DistributionPlanCard
         plan={plan}
         fleet={fleet}
@@ -898,48 +880,394 @@ function RoutesView({
   );
 }
 
-const STATIONS: { id: 1 | 2 | 3; nombre: string; productos: string }[] = [
-  { id: 1, nombre: "Estación 1", productos: "Híbrido · Rojo de palma · Estearina" },
-  { id: 2, nombre: "Estación 2", productos: "Soya · Canola · Girasol · Maíz" },
-  { id: 3, nombre: "Estación 3", productos: "PKO · Palmiste" }
-];
-
-function ReceptionCapacityCard({
-  stationTankers,
-  updateStationTankers
+function DatosMaestrosView({
+  fleet,
+  setFleet,
+  routes,
+  updateRoute,
+  saveRoutes,
+  routesSaveStatus,
+  stations,
+  allProducts,
+  addStation,
+  removeStation,
+  renameStation,
+  updateStationTankers,
+  assignProduct,
+  saveStations,
+  stationsSaveStatus
 }: {
-  stationTankers: StationCapacity;
-  updateStationTankers: (estacion: 1 | 2 | 3, value: number) => void;
+  fleet: FleetInput;
+  setFleet: (value: FleetInput) => void;
+  routes: RouteCost[];
+  updateRoute: (origen: string, destino: string, patch: Partial<RouteCost>) => void;
+  saveRoutes: () => void;
+  routesSaveStatus: string;
+  stations: Station[];
+  allProducts: string[];
+  addStation: () => void;
+  removeStation: (id: string) => void;
+  renameStation: (id: string, nombre: string) => void;
+  updateStationTankers: (id: string, value: number) => void;
+  assignProduct: (producto: string, stationId: string | null) => void;
+  saveStations: () => void;
+  stationsSaveStatus: string;
 }) {
+  return (
+    <section className="grid content-stack">
+      <FleetCard fleet={fleet} setFleet={setFleet} />
+      <RoutesMatrixCard
+        routes={routes}
+        updateRoute={updateRoute}
+        saveRoutes={saveRoutes}
+        routesSaveStatus={routesSaveStatus}
+      />
+      <StationsCard
+        stations={stations}
+        allProducts={allProducts}
+        addStation={addStation}
+        removeStation={removeStation}
+        renameStation={renameStation}
+        updateStationTankers={updateStationTankers}
+        assignProduct={assignProduct}
+        saveStations={saveStations}
+        stationsSaveStatus={stationsSaveStatus}
+      />
+    </section>
+  );
+}
+
+function FleetCard({ fleet, setFleet }: { fleet: FleetInput; setFleet: (value: FleetInput) => void }) {
+  const dailyCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   return (
     <div className="card">
       <div className="section-title">
         <div>
-          <h3>Capacidad de recepción diaria</h3>
+          <h3>Flota disponible</h3>
           <p className="section-note">
-            Cupo de tanqueros/día por estación (cuello de botella del despacho). Cada estación recibe solo sus
-            productos. Aprovéchala entre semana para evitar horas extra el fin de semana.
+            Número de transportes y toneladas por transporte. Capacidad diaria = transportes × toneladas × viajes/día.
           </p>
         </div>
       </div>
       <div className="reception-grid">
-        {STATIONS.map((station) => (
-          <label key={station.id} className="reception-item">
-            <span className="reception-name">{station.nombre}</span>
-            <span className="reception-products">{station.productos}</span>
-            <div className="reception-input">
-              <input
-                className="cell-input cell-input--num"
-                type="number"
-                min={0}
-                value={stationTankers[station.id] ?? 0}
-                onChange={(event) => updateStationTankers(station.id, Number(event.target.value) || 0)}
-              />
-              <span className="section-note">tanqueros/día</span>
-            </div>
-          </label>
-        ))}
+        <label className="reception-item">
+          <span className="reception-name">Número de transportes</span>
+          <span className="reception-products">Tanqueros disponibles en la flota</span>
+          <div className="reception-input">
+            <input
+              className="cell-input cell-input--num"
+              type="number"
+              min={0}
+              value={fleet.unidades}
+              onChange={(event) => setFleet({ ...fleet, unidades: Number(event.target.value) || 0 })}
+            />
+            <span className="section-note">tanqueros</span>
+          </div>
+        </label>
+        <label className="reception-item">
+          <span className="reception-name">Toneladas por transporte</span>
+          <span className="reception-products">Carga de cada tanquero</span>
+          <div className="reception-input">
+            <input
+              className="cell-input cell-input--num"
+              type="number"
+              min={0}
+              value={fleet.toneladasPorUnidad}
+              onChange={(event) => setFleet({ ...fleet, toneladasPorUnidad: Number(event.target.value) || 0 })}
+            />
+            <span className="section-note">t/tanquero</span>
+          </div>
+        </label>
+        <div className="reception-item">
+          <span className="reception-name">Capacidad diaria</span>
+          <span className="reception-products">Transportes × toneladas × viajes</span>
+          <div className="reception-input">
+            <strong>{format(dailyCapacity)} t</strong>
+          </div>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function RoutesMatrixCard({
+  routes,
+  updateRoute,
+  saveRoutes,
+  routesSaveStatus
+}: {
+  routes: RouteCost[];
+  updateRoute: (origen: string, destino: string, patch: Partial<RouteCost>) => void;
+  saveRoutes: () => void;
+  routesSaveStatus: string;
+}) {
+  const [collapsed, setCollapsed] = useState(true);
+
+  return (
+    <div className="card">
+      <div className="section-title">
+        <button
+          type="button"
+          className="collapse-title"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+          <div>
+            <h3>Matriz de rutas</h3>
+            {!collapsed && (
+              <p className="section-note">
+                Edita km y $/km (costo ref. = km × $/km), input del plan. El check habilita o
+                deshabilita cada nodo. Guarda para persistir en Supabase.
+              </p>
+            )}
+          </div>
+        </button>
+        {!collapsed && (
+          <div className="routes-save">
+            {routesSaveStatus && <span className="section-note">{routesSaveStatus}</span>}
+            <button className="btn primary" onClick={saveRoutes}>
+              <Save size={16} /> Guardar
+            </button>
+          </div>
+        )}
+      </div>
+      {!collapsed &&
+        (routes.length === 0 ? (
+          <div className="empty-state">Carga datos con ubicaciones de tanque para ver las rutas.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="routes-table">
+              <thead>
+                <tr>
+                  <th>Origen</th>
+                  <th>Destino</th>
+                  <th>Km</th>
+                  <th>$/km</th>
+                  <th>Costo ref.</th>
+                  <th>Nodos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {routes.map((route) => {
+                  const enabled = route.enabled !== false;
+                  return (
+                    <tr key={routeKey(route.origen, route.destino)} className={enabled ? "" : "route-off"}>
+                      <td>{route.origen}</td>
+                      <td>{route.destino}</td>
+                      <td>
+                        <input
+                          className="cell-input cell-input--num"
+                          type="number"
+                          min={0}
+                          value={route.km}
+                          onChange={(event) =>
+                            updateRoute(route.origen, route.destino, { km: Number(event.target.value) || 0 })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="cell-input cell-input--num"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={route.costoPorKm}
+                          onChange={(event) =>
+                            updateRoute(route.origen, route.destino, { costoPorKm: Number(event.target.value) || 0 })
+                          }
+                        />
+                      </td>
+                      <td>${format(route.km * route.costoPorKm)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className={`node-toggle ${enabled ? "on" : "off"}`}
+                          onClick={() => updateRoute(route.origen, route.destino, { enabled: !enabled })}
+                          title={enabled ? "Nodo habilitado" : "Nodo deshabilitado"}
+                          aria-pressed={enabled}
+                        >
+                          {enabled ? "✓" : "✗"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function StationsCard({
+  stations,
+  allProducts,
+  addStation,
+  removeStation,
+  renameStation,
+  updateStationTankers,
+  assignProduct,
+  saveStations,
+  stationsSaveStatus
+}: {
+  stations: Station[];
+  allProducts: string[];
+  addStation: () => void;
+  removeStation: (id: string) => void;
+  renameStation: (id: string, nombre: string) => void;
+  updateStationTankers: (id: string, value: number) => void;
+  assignProduct: (producto: string, stationId: string | null) => void;
+  saveStations: () => void;
+  stationsSaveStatus: string;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [dragProduct, setDragProduct] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+
+  const assigned = new Set(stations.flatMap((station) => station.productos));
+  const unassigned = allProducts.filter((producto) => !assigned.has(producto));
+
+  function handleDrop(stationId: string | null) {
+    if (dragProduct) assignProduct(dragProduct, stationId);
+    setDragProduct(null);
+    setOverId(null);
+  }
+
+  return (
+    <div className="card">
+      <div className="section-title">
+        <button
+          type="button"
+          className="collapse-title"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+          <div>
+            <h3>Estaciones de recepción</h3>
+            {!collapsed && (
+              <p className="section-note">
+                Cupo de tanqueros/día por estación (cuello de botella del despacho). Arrastra los productos a cada
+                estación; lo que quede en “Sin asignar” se excluye del plan. Aprovéchala entre semana para evitar horas
+                extra el fin de semana.
+              </p>
+            )}
+          </div>
+        </button>
+        {!collapsed && (
+          <div className="routes-save">
+            {stationsSaveStatus && <span className="section-note">{stationsSaveStatus}</span>}
+            <button className="btn" onClick={addStation}>
+              <Plus size={16} /> Agregar estación
+            </button>
+            <button className="btn primary" onClick={saveStations}>
+              <Save size={16} /> Guardar
+            </button>
+          </div>
+        )}
+      </div>
+      {!collapsed && (
+        <>
+          <div className="stations-grid">
+            {stations.map((station) => (
+              <div
+                key={station.id}
+                className={`station-card${overId === station.id ? " over" : ""}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setOverId(station.id);
+                }}
+                onDragLeave={() => setOverId((current) => (current === station.id ? null : current))}
+                onDrop={() => handleDrop(station.id)}
+              >
+                <div className="station-head">
+                  <input
+                    className="cell-input station-name"
+                    value={station.nombre}
+                    onChange={(event) => renameStation(station.id, event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="station-remove"
+                    onClick={() => removeStation(station.id)}
+                    title="Eliminar estación"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+                <label className="station-tankers">
+                  <input
+                    className="cell-input cell-input--num"
+                    type="number"
+                    min={0}
+                    value={station.tankers}
+                    onChange={(event) => updateStationTankers(station.id, Number(event.target.value) || 0)}
+                  />
+                  <span className="section-note">tanqueros/día</span>
+                </label>
+                <div className="station-dropzone">
+                  {station.productos.length === 0 ? (
+                    <span className="dropzone-hint">Arrastra productos aquí</span>
+                  ) : (
+                    station.productos.map((producto) => (
+                      <span
+                        key={producto}
+                        className="product-chip"
+                        draggable
+                        onDragStart={() => setDragProduct(producto)}
+                        onDragEnd={() => setDragProduct(null)}
+                      >
+                        {producto}
+                        <button
+                          type="button"
+                          className="chip-x"
+                          onClick={() => assignProduct(producto, null)}
+                          title="Quitar de la estación"
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div
+            className={`station-pool${overId === "pool" ? " over" : ""}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setOverId("pool");
+            }}
+            onDragLeave={() => setOverId((current) => (current === "pool" ? null : current))}
+            onDrop={() => handleDrop(null)}
+          >
+            <div className="pool-head">
+              <strong>Sin asignar</strong>
+              <span className="section-note">No entran al plan hasta asignarlos a una estación.</span>
+            </div>
+            <div className="pool-chips">
+              {unassigned.length === 0 ? (
+                <span className="dropzone-hint">Todos los productos están asignados.</span>
+              ) : (
+                unassigned.map((producto) => (
+                  <span
+                    key={producto}
+                    className="product-chip"
+                    draggable
+                    onDragStart={() => setDragProduct(producto)}
+                    onDragEnd={() => setDragProduct(null)}
+                  >
+                    {producto}
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1077,6 +1405,7 @@ function DistributionPlanCard({
   const [emailTo, setEmailTo] = useState("");
   const [sending, setSending] = useState<"telegram" | "email" | null>(null);
   const [approving, setApproving] = useState(false);
+  const [approved, setApproved] = useState(false);
   const [status, setStatus] = useState("");
 
   function fieldsFor(stop: DistributionPlan["stops"][number], index: number): DispatchFields {
@@ -1123,6 +1452,28 @@ function DistributionPlanCard({
       ].join("\n");
     });
     return `<b>🚚 ORDEN DE DESPACHO – ${fechaTexto}</b>\n\n${lines.join("\n\n")}`;
+  }
+
+  // Version texto plano (sin HTML) para el cliente de correo via mailto.
+  function buildPlainText() {
+    const lines = orders.map(({ stop, fields, costo }, index) => {
+      return [
+        `${index + 1}. ${fields.partida || stop.origen} -> ${fields.destino || refineryName}`,
+        `   Producto: ${stop.producto} - ${fields.toneladas || "0"} t`,
+        `   Costo estimado: $${format(costo)}`
+      ].join("\n");
+    });
+    return `ORDEN DE DESPACHO - ${fechaTexto}\n\n${lines.join("\n\n")}\n\nTotal: ${format(
+      plan.toneladasTotales
+    )} t - Costo total $${format(costoTotal)}`;
+  }
+
+  // Abre el cliente de correo del usuario (mailto) con la orden ya redactada.
+  function openMailto() {
+    const asunto = encodeURIComponent(`Orden de despacho - ${fechaTexto}`);
+    const cuerpo = encodeURIComponent(buildPlainText());
+    const destino = encodeURIComponent(emailTo.trim());
+    window.location.href = `mailto:${destino}?subject=${asunto}&body=${cuerpo}`;
   }
 
   function buildHtml() {
@@ -1221,6 +1572,7 @@ function DistributionPlanCard({
       const data = await response.json();
       if (data.ok) {
         setStatus(`Plan aprobado: ${format(data.toneladas)} t registradas como transportadas.`);
+        setApproved(true);
         onApproved();
       } else {
         setStatus(data.message ?? "No se pudo aprobar el plan.");
@@ -1280,7 +1632,7 @@ function DistributionPlanCard({
                         />
                       </td>
                       <td>{stop.producto}</td>
-                      <td>E{stop.estacion}</td>
+                      <td>{stop.estacion}</td>
                       <td>{format(stop.camiones)}</td>
                       <td>
                         <input
@@ -1332,6 +1684,11 @@ function DistributionPlanCard({
               <button className="btn primary" onClick={approve} disabled={busy}>
                 <CheckCircle2 size={16} /> {approving ? "Aprobando…" : "Aprobar plan"}
               </button>
+              {approved && (
+                <button className="btn mailto-btn" onClick={openMailto} title="Abrir en tu cliente de correo">
+                  <Mail size={16} /> Abrir en correo
+                </button>
+              )}
             </div>
           </div>
           {status && <p className="section-note dispatch-status">{status}</p>}
@@ -1538,13 +1895,15 @@ function Kpi({ icon, label, value }: { icon: ReactNode; label: string; value: st
 }
 
 function viewTitle(view: View) {
-  if (view === "rutas") return "Rutas, costo y capacidad logística";
+  if (view === "rutas") return "Plan de distribución diario";
+  if (view === "datos") return "Datos maestros";
   if (view === "ia") return "Asistente IA operativo";
   return "Gestión de almacenamiento y flujo a refinería";
 }
 
 function viewSubtitle(view: View) {
-  if (view === "rutas") return "Priorización por $/km, toneladas sugeridas, acidez y flota disponible.";
+  if (view === "rutas") return "Despacho del día por acidez, costo y capacidad de recepción, con histórico de aprobados.";
+  if (view === "datos") return "Flota, matriz de rutas y estaciones de recepción que alimentan el plan.";
   if (view === "ia") return "Consultas ejecutivas con contexto de inventario, rutas, flota y calidad.";
   return "Inventario neto, acidez, capacidad comprometida, prioridades de despacho y alertas.";
 }
@@ -1701,4 +2060,15 @@ function normalize(value: string) {
 
 function routeKey(origen: string, destino: string) {
   return `${origen}|||${destino}`;
+}
+
+// Normaliza una estacion cruda (Supabase / localStorage) al tipo Station.
+function normalizeStation(raw: unknown): Station {
+  const record = (raw ?? {}) as Record<string, unknown>;
+  return {
+    id: String(record.id ?? `est-${Math.random().toString(36).slice(2)}`),
+    nombre: String(record.nombre ?? "Estación"),
+    tankers: Number(record.tankers) || 0,
+    productos: Array.isArray(record.productos) ? record.productos.map(String) : []
+  };
 }

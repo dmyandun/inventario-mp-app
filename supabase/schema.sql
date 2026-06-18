@@ -67,3 +67,23 @@ create table if not exists inventario_mp_app_routes (
 -- Misma postura de seguridad: RLS sin politicas; acceso solo server-side con la
 -- llave secreta (src/app/api/routes/route.ts).
 alter table inventario_mp_app_routes enable row level security;
+
+
+-- ============================================================================
+-- Estaciones de recepcion de la refineria (configurables). Cada fila = una
+-- estacion: nombre, cupo de tanqueros/dia y la lista de productos que recibe
+-- (jsonb). Cuello de botella del plan diario (ver buildDistributionPlan).
+-- ============================================================================
+
+create table if not exists inventario_mp_app_stations (
+  id          text primary key,
+  nombre      text not null,
+  tankers     integer not null default 0,
+  productos   jsonb not null default '[]'::jsonb,
+  posicion    integer not null default 0,
+  updated_at  timestamptz not null default now()
+);
+
+-- Misma postura de seguridad: RLS sin politicas; acceso solo server-side con la
+-- llave secreta (src/app/api/stations/route.ts).
+alter table inventario_mp_app_stations enable row level security;

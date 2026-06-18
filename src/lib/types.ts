@@ -34,13 +34,20 @@ export type RouteCost = {
   enabled?: boolean;
 };
 
-export type StationCapacity = Record<1 | 2 | 3, number>;
+// Estacion de recepcion configurable: nombre, cupo de tanqueros/dia y la lista de
+// productos (por nombre) que puede recibir. Producto sin estacion = excluido del plan.
+export type Station = {
+  id: string;
+  nombre: string;
+  tankers: number;
+  productos: string[];
+};
 
 export type DistributionStop = {
   origen: string;
   producto: string;
   tanque: string;
-  estacion: number;
+  estacion: string;
   occupancy: number;
   acidez: number;
   urgency: number;

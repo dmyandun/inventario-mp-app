@@ -6,43 +6,61 @@ import {
   InventoryRow,
   Recommendation,
   RouteCost,
-  StationCapacity
+  Station
 } from "./types";
 
 const refineryName = "DANEC SANGOLQUI";
 
-// Pesos del objetivo (maximizar uso de recepcion):
+// Pesos del objetivo "acidez manda, costo real":
 const BASE = 1; // por tonelada: incentiva LLENAR la recepcion (evita horas extra fin de semana)
 const URGENT_BONUS = 1000; // por tonelada de fuente en el top 25% de acidez -> se despacha primero
-const ACID_W = 10; // afina el orden dentro del mismo grupo por acidez
-const EPS_COST = 0.0001; // desempate: a igualdad, prefiere ruta mas barata / menos viajes
+const ACID_W = 10; // ordena entre si a las fuentes urgentes
+const COST_W = 0.01; // peso REAL del costo: decide que NO urgente entra (ruta mas barata)
 
 const sourceTypes = new Set(["EXTRACTORA", "PUERTO"]);
 
-// Cupos de recepcion por defecto (tanqueros/dia por estacion).
-export const DEFAULT_STATION_TANKERS: StationCapacity = { 1: 5, 2: 5, 3: 5 };
+// Semillas por keyword para crear las 3 estaciones iniciales cuando no hay nada
+// guardado. Las estaciones reales son configurables (productos asignados a mano).
+const SEED_STATIONS: { nombre: string; test: RegExp }[] = [
+  { nombre: "Estación 1", test: /HIBRIDO|ROJO DE PALMA|ESTEARINA/ },
+  { nombre: "Estación 2", test: /SOYA|CANOLA|GIRASOL|MA[IÍ]Z/ },
+  { nombre: "Estación 3", test: /PKO|PALMISTE/ }
+];
 
-// Cada estacion recibe solo ciertos productos (por conexion de tuberia). Ruteo por
-// nombre de producto en mayusculas. Productos sin estacion no pueden recibirse.
-export function stationFor(producto: string): 1 | 2 | 3 | 0 {
-  const p = producto.toUpperCase();
-  if (/HIBRIDO|ROJO DE PALMA|ESTEARINA/.test(p)) return 1;
-  if (/SOYA|CANOLA|GIRASOL|MA[IÍ]Z/.test(p)) return 2;
-  if (/PKO|PALMISTE/.test(p)) return 3;
-  return 0;
+// Estaciones por defecto: 3 estaciones (5 tanqueros c/u) con los productos del
+// inventario asignados por keyword. Solo se usa si Supabase/localStorage vacios.
+export function defaultStationSeed(products: string[]): Station[] {
+  return SEED_STATIONS.map((seed, index) => ({
+    id: `estacion-${index + 1}`,
+    nombre: seed.nombre,
+    tankers: 5,
+    productos: products.filter((producto) => seed.test.test(producto.toUpperCase()))
+  }));
+}
+
+// Mapa producto (normalizado) -> estacion que lo recibe. Producto sin estacion no
+// puede recibirse y queda fuera del plan.
+function buildProductStationMap(stations: Station[]) {
+  const map = new Map<string, Station>();
+  for (const station of stations) {
+    for (const producto of station.productos) {
+      map.set(normalize(producto), station);
+    }
+  }
+  return map;
 }
 
 export type DistributionOptions = {
   enabledSources?: Set<string>;
   routeCost?: (origen: string, destino: string) => number;
-  stationTankers?: StationCapacity;
+  stations?: Station[];
 };
 
 type Source = {
   row: InventoryRow;
   occupancy: number;
   costPerTrip: number;
-  estacion: 1 | 2 | 3;
+  station: Station;
   urgent: boolean;
 };
 
@@ -56,17 +74,18 @@ export function buildDistributionPlan(
   fleet: FleetInput,
   options: DistributionOptions = {}
 ): DistributionPlan {
-  const { enabledSources, routeCost, stationTankers = DEFAULT_STATION_TANKERS } = options;
+  const { enabledSources, routeCost, stations = [] } = options;
   const dailyCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   const truckCap = fleet.toneladasPorUnidad > 0 ? fleet.toneladasPorUnidad : 1;
   const tripsPerTruck = fleet.viajesPorDia > 0 ? fleet.viajesPorDia : 1;
+  const productStation = buildProductStationMap(stations);
 
   const candidates = rows.filter(
     (row) =>
       sourceTypes.has(normalize(row.tipo)) &&
       row.disponible > 0 &&
       (!enabledSources || enabledSources.has(row.nombre)) &&
-      stationFor(row.producto) !== 0
+      productStation.has(normalize(row.producto))
   );
 
   const empty: DistributionPlan = {
@@ -86,14 +105,14 @@ export function buildDistributionPlan(
     row,
     occupancy: row.capacidad > 0 ? row.disponible / row.capacidad : 0,
     costPerTrip: routeCost ? Math.max(0, routeCost(row.nombre, refineryName)) : 0,
-    estacion: stationFor(row.producto) as 1 | 2 | 3,
+    station: productStation.get(normalize(row.producto))!,
     urgent: row.acidez >= p75
   }));
 
   const refineryFree = getRefineryFreeCapacity(rows).byProduct;
   const products = Array.from(new Set(sources.map((source) => source.row.producto)));
 
-  const solved = solvePlan(sources, products, { refineryFree, truckCap, stationTankers });
+  const solved = solvePlan(sources, products, stations, { refineryFree, truckCap });
   if (!solved || !solved.feasible) return empty;
 
   const stops: DistributionStop[] = [];
@@ -107,7 +126,7 @@ export function buildDistributionPlan(
       origen: source.row.nombre,
       producto: source.row.producto,
       tanque: source.row.tanque,
-      estacion: source.estacion,
+      estacion: source.station.nombre,
       occupancy: source.occupancy,
       acidez: source.row.acidez,
       urgency: source.row.acidez,
@@ -118,7 +137,9 @@ export function buildDistributionPlan(
     });
   });
   // Por estacion y luego mayor acidez para lectura.
-  stops.sort((a, b) => a.estacion - b.estacion || b.acidez - a.acidez || b.toneladas - a.toneladas);
+  stops.sort(
+    (a, b) => a.estacion.localeCompare(b.estacion) || b.acidez - a.acidez || b.toneladas - a.toneladas
+  );
 
   return {
     stops,
@@ -133,21 +154,22 @@ export function buildDistributionPlan(
 type SolveParams = {
   refineryFree: Record<string, number>;
   truckCap: number;
-  stationTankers: StationCapacity;
 };
 
-// MILP: maximiza Σ w·tons (llenar recepcion, acidez top-25% primero) menos un
-// desempate de costo. Topes: disponible por fuente, almacenamiento libre por
-// producto, y cupo de tanqueros por estacion (el limite real de recepcion).
-function solvePlan(sources: Source[], products: string[], params: SolveParams) {
-  const { refineryFree, truckCap, stationTankers } = params;
+// MILP "acidez manda, costo real": maximiza Σ w·tons − COST_W·Σ costPorViaje·viajes.
+// Los urgentes (top 25% acidez) llevan un bono enorme y entran primero; los NO
+// urgentes solo aportan BASE·tons, asi que entre ellos decide el costo de ruta.
+// Topes: disponible por fuente, almacenamiento libre por producto y cupo de
+// tanqueros por estacion (el limite real de recepcion).
+function solvePlan(sources: Source[], products: string[], stations: Station[], params: SolveParams) {
+  const { refineryFree, truckCap } = params;
   const variables: Record<string, Record<string, number>> = {};
   const ints: Record<string, 1> = {};
-  const constraints: Record<string, { min?: number; max?: number }> = {
-    station_1: { max: stationTankers[1] ?? 0 },
-    station_2: { max: stationTankers[2] ?? 0 },
-    station_3: { max: stationTankers[3] ?? 0 }
-  };
+  const constraints: Record<string, { min?: number; max?: number }> = {};
+
+  for (const station of stations) {
+    constraints[`station_${station.id}`] = { max: Math.max(0, station.tankers) };
+  }
 
   for (const p of products) {
     constraints[`refcap_${p}`] = { max: refineryFree[p] ?? 0 };
@@ -155,7 +177,8 @@ function solvePlan(sources: Source[], products: string[], params: SolveParams) {
 
   sources.forEach((source, index) => {
     const p = source.row.producto;
-    const weight = BASE + (source.urgent ? URGENT_BONUS : 0) + ACID_W * source.row.acidez;
+    // Sin acidez para los NO urgentes -> compiten solo por costo de ruta.
+    const weight = BASE + (source.urgent ? URGENT_BONUS + ACID_W * source.row.acidez : 0);
     variables[`tons_${index}`] = {
       cost: weight,
       [`cap_${index}`]: 1,
@@ -163,9 +186,9 @@ function solvePlan(sources: Source[], products: string[], params: SolveParams) {
       [`refcap_${p}`]: 1
     };
     variables[`trips_${index}`] = {
-      cost: -EPS_COST * source.costPerTrip,
+      cost: -COST_W * source.costPerTrip,
       [`link_${index}`]: -truckCap,
-      [`station_${source.estacion}`]: 1
+      [`station_${source.station.id}`]: 1
     };
     constraints[`cap_${index}`] = { max: source.row.disponible };
     constraints[`link_${index}`] = { max: 0 };
