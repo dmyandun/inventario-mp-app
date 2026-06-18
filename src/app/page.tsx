@@ -18,7 +18,14 @@ import {
 import type { ReactNode } from "react";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { parseInventoryWorkbook } from "@/lib/excel";
-import { buildDistributionPlan, buildRecommendations, getKpis } from "@/lib/optimizer";
+import {
+  buildDistributionPlan,
+  buildRecommendations,
+  getExtractoraStatus,
+  getIncomingByProduct,
+  getKpis,
+  getRefineryFreeCapacity
+} from "@/lib/optimizer";
 import { sampleInventory, sampleRoutes } from "@/lib/sample-data";
 import { DistributionPlan, FleetInput, InventoryRow } from "@/lib/types";
 
@@ -120,6 +127,11 @@ export default function Home() {
         refineryOpenDemand,
         dailyFleetCapacity,
         fleet,
+        // Para validar prioridad por acidez y espacio de almacenamiento:
+        refineryFreeCapacity: getRefineryFreeCapacity(currentRows),
+        incomingByProduct: getIncomingByProduct(currentRows),
+        extractoraStatus: getExtractoraStatus(currentRows),
+        distributionPlan,
         routes: sampleRoutes,
         topRecommendations: recommendations.slice(0, 8),
         inventoryHistory,
@@ -139,7 +151,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question:
-            "Con base en el inventario actual, prioriza los despachos hacia la refineria DANEC SANGOLQUI. Indica prioridad, ubicacion, toneladas sugeridas, motivo y riesgo.",
+            "Prioriza los despachos hacia la refineria DANEC SANGOLQUI: primero las extractoras con acidez mas alta, validando que no excedan la capacidad libre de la refineria y que el material entrante (proveedores, importaciones, transito) tenga donde almacenarse; si una extractora del mismo producto esta copada y viene entrante, sugiere despacharla para liberar espacio. Indica prioridad, ubicacion, producto, toneladas sugeridas, motivo y riesgo.",
           context: buildAiContext()
         })
       });

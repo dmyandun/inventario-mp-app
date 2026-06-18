@@ -9,32 +9,23 @@ import {
 
 const refineryName = "DANEC SANGOLQUI";
 
-// Umbral de calidad: por encima de 3 de acidez la materia prima empieza a
-// degradarse y el despacho se vuelve urgente.
-const ACID_THRESHOLD = 3;
-// La ocupacion (0..100) es el driver principal del despacho; la acidez puede
-// "rescatar" tanques criticos aunque no esten copados. ACID_WEIGHT alto hace que
-// cada punto de acidez sobre el umbral sume tanto como 20 puntos de ocupacion.
-const OCC_WEIGHT = 1;
-const ACID_WEIGHT = 20;
-
-// Genera el plan de distribucion diario: asigna la flota a los origenes en orden
-// de urgencia (ocupacion copada primero, luego acidez alta) hasta agotar la
-// capacidad diaria, e informa toneladas, camiones y viajes por camion.
+// Genera el plan de distribucion diario: despacha desde las EXTRACTORAS hacia la
+// refineria priorizando SIEMPRE primero la acidez alta (calidad) y, a igualdad de
+// acidez, la ocupacion mas copada (para liberar espacio). Asigna la flota en ese
+// orden hasta agotar la capacidad diaria, e informa toneladas, camiones y viajes.
 export function buildDistributionPlan(rows: InventoryRow[], fleet: FleetInput): DistributionPlan {
   const dailyCapacity = fleet.unidades * fleet.toneladasPorUnidad * fleet.viajesPorDia;
   const tonsPerTrip = fleet.toneladasPorUnidad > 0 ? fleet.toneladasPorUnidad : 1;
   const tripsPerTruck = fleet.viajesPorDia > 0 ? fleet.viajesPorDia : 1;
 
   const candidates = rows
-    .filter((row) => normalize(row.nombre) !== normalize(refineryName) && row.disponible > 0)
+    .filter((row) => normalize(row.tipo) === "EXTRACTORA" && row.disponible > 0)
     .map((row) => {
       const occupancy = row.capacidad > 0 ? row.disponible / row.capacidad : 0;
-      const acidityExcess = Math.max(0, row.acidez - ACID_THRESHOLD);
-      const urgency = occupancy * 100 * OCC_WEIGHT + acidityExcess * ACID_WEIGHT;
-      return { row, occupancy, urgency };
+      return { row, occupancy };
     })
-    .sort((a, b) => b.urgency - a.urgency);
+    // Prioridad: 1) acidez alta primero, 2) ocupacion copada como desempate.
+    .sort((a, b) => b.row.acidez - a.row.acidez || b.occupancy - a.occupancy);
 
   let remainingTons = dailyCapacity;
   let remainingTrips = fleet.unidades * tripsPerTruck;
@@ -57,7 +48,7 @@ export function buildDistributionPlan(rows: InventoryRow[], fleet: FleetInput): 
       tanque: candidate.row.tanque,
       occupancy: candidate.occupancy,
       acidez: candidate.row.acidez,
-      urgency: candidate.urgency,
+      urgency: candidate.row.acidez,
       toneladas: Math.round(toneladas),
       camiones,
       viajesPorCamion
@@ -74,6 +65,53 @@ export function buildDistributionPlan(rows: InventoryRow[], fleet: FleetInput): 
     viajesTotales: stops.reduce((total, stop) => total + stop.camiones * stop.viajesPorCamion, 0),
     capacidadDiaria: dailyCapacity
   };
+}
+
+// Capacidad libre de la refineria por producto (suma de cap - disponible en los
+// tanques de DANEC). Sirve para validar que los despachos no excedan el espacio.
+export function getRefineryFreeCapacity(rows: InventoryRow[]) {
+  const byProduct: Record<string, number> = {};
+  let total = 0;
+  for (const row of rows) {
+    if (normalize(row.nombre) !== normalize(refineryName) || row.capacidad <= 0) continue;
+    const free = Math.max(0, row.capacidad - row.disponible);
+    byProduct[row.producto] = (byProduct[row.producto] ?? 0) + free;
+    total += free;
+  }
+  return { total, byProduct };
+}
+
+// Material entrante por producto: proveedores (pendienteRetiro), importaciones y
+// transito (filas sin tanque). Necesita espacio donde almacenarse.
+export function getIncomingByProduct(rows: InventoryRow[]) {
+  const byProduct: Record<string, number> = {};
+  let total = 0;
+  for (const row of rows) {
+    if (row.tanque) continue;
+    const incoming = row.transito + row.importaciones + row.pendienteRetiro;
+    if (incoming <= 0) continue;
+    byProduct[row.producto] = (byProduct[row.producto] ?? 0) + incoming;
+    total += incoming;
+  }
+  return { total, byProduct };
+}
+
+// Estado de cada extractora (ocupacion y acidez) para que la IA evalue calidad y
+// espacio disponible para el material entrante.
+export function getExtractoraStatus(rows: InventoryRow[]) {
+  return rows
+    .filter((row) => normalize(row.tipo) === "EXTRACTORA")
+    .map((row) => ({
+      nombre: row.nombre,
+      producto: row.producto,
+      tanque: row.tanque,
+      capacidad: row.capacidad,
+      disponible: row.disponible,
+      libre: Math.max(0, row.capacidad - row.disponible),
+      occupancy: row.capacidad > 0 ? Number((row.disponible / row.capacidad).toFixed(3)) : 0,
+      acidez: row.acidez
+    }))
+    .sort((a, b) => b.acidez - a.acidez || b.occupancy - a.occupancy);
 }
 
 export function getKpis(rows: InventoryRow[]) {
