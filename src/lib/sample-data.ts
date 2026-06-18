@@ -108,6 +108,24 @@ const latestSampleInventory: InventoryRow[] = [
     transito: 130,
     importaciones: 0,
     observacion: "Nivel bajo"
+  },
+  {
+    fecha: "2026-05-29",
+    tipo: "PROVEEDORES",
+    nombre: "PROVEEDOR LA CONCORDIA",
+    producto: "ACEITE ROJO DE PALMA HIBRIDA",
+    tanque: "",
+    capacidad: 0,
+    inventario: 0,
+    disponible: 0,
+    acidez: 0,
+    diasRetrazo: 0,
+    pedido: 0,
+    retirado: 0,
+    pendienteRetiro: 320,
+    transito: 0,
+    importaciones: 0,
+    observacion: "Materia prima por retirar"
   }
 ];
 

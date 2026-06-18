@@ -188,23 +188,33 @@ export default function Home() {
     refreshRoutes();
   }, [refreshRoutes]);
 
-  // Nodos = ubicaciones con tanque (extractoras, puerto, refineria).
-  const tankNodeNames = useMemo(() => {
-    const names = new Set<string>();
+  // Nodos de la matriz: ubicaciones con tanque (extractoras, puerto, refineria) y
+  // los PROVEEDORES (suministro sin tanque). nombre -> tipo normalizado.
+  const matrixNodes = useMemo(() => {
+    const map = new Map<string, string>();
     for (const row of rows) {
-      if (["EXTRACTORA", "PUERTO", "REFINERIA"].includes(normalize(row.tipo)) && row.nombre) {
-        names.add(row.nombre);
+      const tipo = normalize(row.tipo);
+      if (["EXTRACTORA", "PUERTO", "REFINERIA", "PROVEEDORES"].includes(tipo) && row.nombre && !map.has(row.nombre)) {
+        map.set(row.nombre, tipo);
       }
     }
-    return Array.from(names).sort();
+    return map;
   }, [rows]);
 
-  // Matriz completa: todos los pares dirigidos origen->destino (origen != destino).
+  // Matriz de pares dirigidos origen->destino (origen != destino). Reglas por tipo:
+  // - entre nodos con tanque (extractora/puerto/refineria): todas las combinaciones.
+  // - PROVEEDORES: solo ENVIAN, y solo a extractoras y refineria (no a puerto ni
+  //   entre proveedores); nunca son destino.
   const routes = useMemo<RouteCost[]>(() => {
     const list: RouteCost[] = [];
-    for (const origen of tankNodeNames) {
-      for (const destino of tankNodeNames) {
+    const names = Array.from(matrixNodes.keys()).sort();
+    for (const origen of names) {
+      const origenTipo = matrixNodes.get(origen)!;
+      for (const destino of names) {
         if (origen === destino) continue;
+        const destinoTipo = matrixNodes.get(destino)!;
+        if (destinoTipo === "PROVEEDORES") continue; // los proveedores no reciben
+        if (origenTipo === "PROVEEDORES" && !["EXTRACTORA", "REFINERIA"].includes(destinoTipo)) continue;
         const override = routeOverrides[routeKey(origen, destino)];
         list.push({
           origen,
@@ -216,7 +226,7 @@ export default function Home() {
       }
     }
     return list;
-  }, [tankNodeNames, routeOverrides]);
+  }, [matrixNodes, routeOverrides]);
 
   // Edits en memoria (el plan recalcula al vuelo). Persisten al pulsar "Guardar".
   const dirtyRoutes = useRef<Set<string>>(new Set());
@@ -1570,18 +1580,35 @@ function DistributionPlanCard({
     day: "numeric"
   });
 
-  // Version texto plano (sin HTML) para el cliente de correo via mailto.
+  // Version texto plano (sin HTML) para el cliente de correo via mailto. Arma una
+  // tabla ASCII alineada con las MISMAS columnas que el plan en la app (mailto no
+  // admite HTML; una tabla monoespaciada es lo mas cercano a la distribucion real).
   function buildPlainText() {
-    const lines = orders.map(({ stop, fields, costo }, index) => {
-      return [
-        `${index + 1}. ${fields.partida || stop.origen} -> ${fields.destino || refineryName}`,
-        `   Producto: ${stop.producto} - ${fields.toneladas || "0"} t`,
-        `   Costo estimado: $${format(costo)}`
-      ].join("\n");
-    });
-    return `ORDEN DE DESPACHO - ${fechaTexto}\n\n${lines.join("\n\n")}\n\nTotal: ${format(
-      plan.toneladasTotales
-    )} t - Costo total $${format(costoTotal)}`;
+    const headers = ["Partida", "Producto", "Estación", "Camiones", "Toneladas", "Destino", "Costo estimado"];
+    const bodyRows = orders.map(({ stop, fields, costo }) => [
+      fields.partida || stop.origen,
+      stop.producto,
+      stop.estacion,
+      String(stop.camiones),
+      `${fields.toneladas || "0"} t`,
+      fields.destino || refineryName,
+      `$${format(costo)}`
+    ]);
+    const totalRow = [
+      "TOTAL",
+      "",
+      "",
+      String(plan.camionesUsados),
+      `${format(plan.toneladasTotales)} t`,
+      "",
+      `$${format(costoTotal)}`
+    ];
+    const allRows = [headers, ...bodyRows, totalRow];
+    const widths = headers.map((_, col) => Math.max(...allRows.map((row) => row[col].length)));
+    const padRow = (row: string[]) => row.map((cell, col) => cell.padEnd(widths[col])).join(" | ");
+    const separator = widths.map((width) => "-".repeat(width)).join("-+-");
+    const lines = [padRow(headers), separator, ...bodyRows.map(padRow), separator, padRow(totalRow)];
+    return `ORDEN DE DESPACHO - ${fechaTexto}\n\n${lines.join("\n")}`;
   }
 
   // Abre el cliente de correo del usuario (mailto) con la orden ya redactada.
