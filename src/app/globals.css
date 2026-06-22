@@ -183,6 +183,34 @@ button {
   background: #fff;
 }
 
+.range-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.range-toggle button {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.range-toggle button + button {
+  border-left: 1px solid var(--line);
+}
+
+.range-toggle button.active {
+  background: var(--green);
+  color: #fff;
+}
+
 .main {
   padding: 26px;
   display: grid;
@@ -959,6 +987,20 @@ th {
   overflow-y: auto;
   display: grid;
   gap: 14px;
+}
+
+.fp-demo-note {
+  background: #fbf4e6;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.recommendations.is-demo {
+  opacity: 0.6;
 }
 
 .fp-ai {

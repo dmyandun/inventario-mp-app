@@ -17,7 +17,6 @@ import {
   Plus,
   Route,
   Save,
-  Send,
   SlidersHorizontal,
   Sparkles,
   Trash2,
@@ -58,6 +57,7 @@ export default function Home() {
   const [navOpen, setNavOpen] = useState(true);
   const [view, setView] = useState<View>("inventario");
   const [product, setProduct] = useState("TODOS");
+  const [historyDays, setHistoryDays] = useState(30);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
@@ -317,6 +317,9 @@ export default function Home() {
     defaultStationSeed(Array.from(new Set(sampleInventory.map((row) => row.producto))))
   );
   const dirtyStations = useRef(false);
+  // True si las estaciones provienen de una fuente real (Supabase/localStorage), no de la
+  // semilla demo. Evita pisar config real al purgar semillas demo en onFileChange.
+  const stationsFromRemote = useRef(false);
   const [stationsSaveStatus, setStationsSaveStatus] = useState("");
 
   useEffect(() => {
@@ -327,6 +330,7 @@ export default function Home() {
         const response = await fetch("/api/stations", { cache: "no-store" });
         const data = await response.json();
         if (!cancelled && data.ok && Array.isArray(data.stations) && data.stations.length > 0) {
+          stationsFromRemote.current = true;
           setStations(data.stations.map(normalizeStation));
           return;
         }
@@ -339,6 +343,7 @@ export default function Home() {
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
+            stationsFromRemote.current = true;
             setStations(parsed.map(normalizeStation));
           }
         }
@@ -449,8 +454,11 @@ export default function Home() {
   const products = useMemo(() => ["TODOS", ...Array.from(new Set(rows.map((row) => row.producto)))], [rows]);
   const productRows = product === "TODOS" ? rows : rows.filter((row) => row.producto === product);
   const currentRows = getLatestInventoryRows(productRows);
-  const inventoryHistory = buildInventoryHistory(productRows);
-  const locationHeatmap = buildLocationHeatmap(productRows);
+  // Las visualizaciones temporales se limitan a una ventana fija de N dias (30/90)
+  // anclada a la fecha mas reciente, para que quepan en pantalla sin scroll.
+  const windowedRows = filterRecentDays(productRows, historyDays);
+  const inventoryHistory = buildInventoryHistory(windowedRows);
+  const locationHeatmap = buildLocationHeatmap(windowedRows);
   const refineryRows = currentRows.filter((row) => normalize(row.nombre) === normalize(refineryName));
   const kpis = getKpis(currentRows);
   const refineryKpis = getKpis(refineryRows);
@@ -476,6 +484,16 @@ export default function Home() {
     const parsed = await parseInventoryWorkbook(file);
     setRows(parsed);
     setDataSource("excel");
+
+    // Reemplazo total: purgar las semillas demo para que no convivan con datos reales.
+    // Rutas: descartar la semilla de sampleRoutes y repoblar solo desde Supabase.
+    setRouteOverrides({});
+    refreshRoutes();
+    // Estaciones: si no hay config real persistida, reseembrar a partir de los productos
+    // reales del Excel (en vez de los productos demo de la semilla original).
+    if (!stationsFromRemote.current && !dirtyStations.current) {
+      setStations(defaultStationSeed(Array.from(new Set(parsed.map((row) => row.producto)))));
+    }
   }
 
   async function askAi(customQuestion = question) {
@@ -559,21 +577,6 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
 
-  async function notifyTelegram() {
-    const top = recommendations[0];
-    const message = top
-      ? `Prioridad inventario MP: ${top.title}. ${top.detail}`
-      : "No hay recomendaciones activas.";
-    const response = await fetch("/api/telegram", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: message })
-    });
-    const data = await response.json();
-    setAnswer(data.ok ? "Notificacion enviada a Telegram." : data.message);
-    setView("ia");
-  }
-
   return (
     <div className={`shell${navOpen ? "" : " nav-collapsed"}`}>
       <aside className="sidebar">
@@ -610,22 +613,18 @@ export default function Home() {
             {viewSubtitle(view) && <p>{viewSubtitle(view)}</p>}
           </div>
           <div className="actions">
-            <label className="btn" title="Cargar Excel ANEXADO">
-              <FileSpreadsheet size={17} />
-              Cargar Excel
-              <input
-                hidden
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={(event) => onFileChange(event.target.files?.[0])}
-              />
-            </label>
-            <button className="btn" onClick={notifyTelegram} title="Enviar alerta">
-              <Send size={17} /> Telegram
-            </button>
-            <button className="btn primary" onClick={() => setView("ia")} title="Abrir IA">
-              <Bot size={17} /> Analizar
-            </button>
+            {view === "datos" && (
+              <label className="btn" title="Cargar Excel ANEXADO">
+                <FileSpreadsheet size={17} />
+                Cargar Excel
+                <input
+                  hidden
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={(event) => onFileChange(event.target.files?.[0])}
+                />
+              </label>
+            )}
           </div>
         </section>
 
@@ -653,6 +652,8 @@ export default function Home() {
             products={products}
             product={product}
             setProduct={setProduct}
+            historyDays={historyDays}
+            setHistoryDays={setHistoryDays}
             history={inventoryHistory}
             heatmap={locationHeatmap}
             dataSource={dataSource}
@@ -721,6 +722,8 @@ function InventoryView({
   products,
   product,
   setProduct,
+  historyDays,
+  setHistoryDays,
   history,
   heatmap,
   dataSource
@@ -729,6 +732,8 @@ function InventoryView({
   products: string[];
   product: string;
   setProduct: (value: string) => void;
+  historyDays: number;
+  setHistoryDays: (value: number) => void;
   history: ReturnType<typeof buildInventoryHistory>;
   heatmap: ReturnType<typeof buildLocationHeatmap>;
   dataSource: "demo" | "excel";
@@ -744,6 +749,20 @@ function InventoryView({
             <option key={item}>{item}</option>
           ))}
         </select>
+        <span>Rango</span>
+        <div className="range-toggle" role="group" aria-label="Rango de fechas">
+          {[30, 90].map((days) => (
+            <button
+              key={days}
+              type="button"
+              className={historyDays === days ? "active" : ""}
+              aria-pressed={historyDays === days}
+              onClick={() => setHistoryDays(days)}
+            >
+              {days} días
+            </button>
+          ))}
+        </div>
       </div>
       <InventoryHistoryChart history={history} dataSource={dataSource} />
       <LocationHeatmap heatmap={heatmap} />
@@ -801,6 +820,11 @@ function InventoryHistoryChart({
   const first = history[0];
   const change = latest && first ? latest.stock - first.stock : 0;
   const hoveredPoint = hoveredIndex === null ? null : history[hoveredIndex];
+  // A alta densidad (ventana de 90 dias) los puntos por dia se vuelven una mancha:
+  // se ocultan y solo se dibuja el dot del indice con hover; el detalle queda en el tooltip.
+  const DENSE = 45;
+  const showDots = history.length <= DENSE;
+  const labelStep = Math.max(1, Math.ceil(history.length / 8));
 
   const xFor = (index: number) =>
     padding.left + (history.length === 1 ? plotWidth / 2 : (index / (history.length - 1)) * plotWidth);
@@ -844,30 +868,42 @@ function InventoryHistoryChart({
           ))}
           <path d={lineFor("stock")} className="chart-line inventory-line" />
           <path d={lineFor("transito")} className="chart-line available-line" />
-          {history.map((point, index) => (
-            <g
-              key={point.date}
-              className="chart-hit-group"
-              onMouseEnter={() => setHoveredIndex(index)}
-              onFocus={() => setHoveredIndex(index)}
-              tabIndex={0}
-            >
-              <rect
-                x={xFor(index) - Math.max(18, plotWidth / Math.max(history.length, 1) / 2)}
-                y={padding.top}
-                width={Math.max(36, plotWidth / Math.max(history.length, 1))}
-                height={plotHeight}
-                className="chart-hit-area"
-              />
-              <circle cx={xFor(index)} cy={yFor(point.stock)} r={hoveredIndex === index ? "6" : "4"} className="inventory-dot" />
-              <circle cx={xFor(index)} cy={yFor(point.transito)} r={hoveredIndex === index ? "6" : "4"} className="available-dot" />
-              {(index === 0 || index === history.length - 1 || history.length <= 4) && (
-                <text x={xFor(index)} y={height - 10} textAnchor="middle">
-                  {shortDate(point.date)}
-                </text>
-              )}
-            </g>
-          ))}
+          {history.map((point, index) => {
+            const isHovered = hoveredIndex === index;
+            const showDot = showDots || isHovered;
+            const showLabel = index % labelStep === 0 || index === history.length - 1;
+            if (!showDot && !showLabel) return null;
+            return (
+              <g key={point.date}>
+                {showDot && (
+                  <>
+                    <circle cx={xFor(index)} cy={yFor(point.stock)} r={isHovered ? "6" : "4"} className="inventory-dot" />
+                    <circle cx={xFor(index)} cy={yFor(point.transito)} r={isHovered ? "6" : "4"} className="available-dot" />
+                  </>
+                )}
+                {showLabel && (
+                  <text x={xFor(index)} y={height - 10} textAnchor="middle">
+                    {shortDate(point.date)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          <rect
+            x={padding.left}
+            y={padding.top}
+            width={plotWidth}
+            height={plotHeight}
+            className="chart-hit-area"
+            onMouseMove={(event) => {
+              const svg = event.currentTarget.ownerSVGElement;
+              if (!svg) return;
+              const bounds = svg.getBoundingClientRect();
+              const xPx = ((event.clientX - bounds.left) / bounds.width) * width;
+              const index = Math.round(((xPx - padding.left) / plotWidth) * (history.length - 1));
+              setHoveredIndex(Math.max(0, Math.min(history.length - 1, index)));
+            }}
+          />
           {hoveredIndex !== null && hoveredPoint && (
             <g className="chart-tooltip">
               <line
@@ -901,6 +937,11 @@ function InventoryHistoryChart({
 
 function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocationHeatmap> }) {
   const { dates, locations } = heatmap;
+  // A alta densidad (ventana de 90 dias) el % no cabe en la celda: solo color, el dato
+  // exacto queda en el tooltip (title). Las etiquetas de fecha se muestran cada labelStep.
+  const DENSE_COLS = 31;
+  const showCellText = dates.length <= DENSE_COLS;
+  const colLabelStep = Math.max(1, Math.ceil(dates.length / 12));
 
   return (
     <div className="card heatmap-card">
@@ -924,9 +965,9 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
             style={{ gridTemplateColumns: `clamp(72px, 14%, 120px) repeat(${dates.length}, minmax(0, 1fr))` }}
           >
             <div className="heat-corner" />
-            {dates.map((date) => (
+            {dates.map((date, index) => (
               <div key={date} className="heat-col-label" title={longDate(date)}>
-                {shortDate(date)}
+                {index % colLabelStep === 0 || index === dates.length - 1 ? shortDate(date) : ""}
               </div>
             ))}
             {locations.map((location) => (
@@ -949,7 +990,7 @@ function LocationHeatmap({ heatmap }: { heatmap: ReturnType<typeof buildLocation
                         : `${location.nombre} · ${longDate(cell.date)}\nOcupación ${(cell.occupancy * 100).toFixed(1)}%\nDisponible ${format(cell.disponible)} t / Capacidad ${format(cell.capacidad)} t`
                     }
                   >
-                    {cell.occupancy === null ? "–" : `${Math.round(cell.occupancy * 100)}%`}
+                    {!showCellText ? "" : cell.occupancy === null ? "–" : `${Math.round(cell.occupancy * 100)}%`}
                   </div>
                 ))}
               </Fragment>
@@ -1902,6 +1943,7 @@ function FloatingPriorities({
 }) {
   const [open, setOpen] = useState(false);
   const highCount = recommendations.filter((item) => item.priority === "alta").length;
+  const isDemo = dataSource !== "excel";
 
   return (
     <div className="floating-priorities">
@@ -1910,14 +1952,19 @@ function FloatingPriorities({
           <div className="fp-header">
             <div>
               <h3>Prioridades sugeridas</h3>
-              <span className="fp-sub">Solo lectura · {dataSource === "excel" ? "Excel cargado" : "Datos demo"}</span>
+              <span className="fp-sub">Solo lectura · {isDemo ? "Vista previa · datos demo" : "Excel cargado"}</span>
             </div>
             <button className="fp-close" onClick={() => setOpen(false)} aria-label="Cerrar">
               <X size={18} />
             </button>
           </div>
           <div className="fp-body">
-            <div className="recommendations">
+            {isDemo && (
+              <div className="fp-demo-note">
+                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver datos reales.
+              </div>
+            )}
+            <div className={`recommendations${isDemo ? " is-demo" : ""}`}>
               {recommendations.slice(0, 6).map((item) => (
                 <article className="rec" key={item.id}>
                   <header>
@@ -2101,6 +2148,15 @@ function getLatestInventoryRows(rows: InventoryRow[]) {
   }
 
   return rows.filter((row) => rowTimestamp(row.fecha) === latestTsByName.get(row.nombre));
+}
+
+function filterRecentDays(rows: InventoryRow[], days: number) {
+  // Ventana de escala fija anclada a la fecha mas reciente presente en los datos
+  // (no a "hoy": el demo/Excel pueden ser historicos). Inclusiva de N dias.
+  if (rows.length === 0) return rows;
+  const maxTs = Math.max(...rows.map((row) => rowTimestamp(row.fecha)));
+  const cutoff = maxTs - (days - 1) * 86_400_000;
+  return rows.filter((row) => rowTimestamp(row.fecha) >= cutoff);
 }
 
 function rowTimestamp(value: string) {
