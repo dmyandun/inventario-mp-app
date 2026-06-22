@@ -1948,8 +1948,14 @@ function FloatingPriorities({
   dataSource: "demo" | "excel";
 }) {
   const [open, setOpen] = useState(false);
+  // Indicador tipo "mensaje no leido": se enciende cuando llega un analisis nuevo
+  // y se apaga al abrir el widget. No es un conteo.
+  const [unread, setUnread] = useState(false);
   const isDemo = dataSource !== "excel";
-  const highCount = items.filter((item) => item.priority === "alta" || item.priority === "crítica").length;
+
+  useEffect(() => {
+    if (items.length > 0) setUnread(true);
+  }, [items]);
 
   return (
     <div className="floating-priorities">
@@ -2003,13 +2009,19 @@ function FloatingPriorities({
       )}
       <button
         className="fp-fab"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() =>
+          setOpen((value) => {
+            const next = !value;
+            if (next) setUnread(false);
+            return next;
+          })
+        }
         aria-expanded={open}
         aria-label="Prioridades sugeridas"
         title="Prioridades sugeridas"
       >
         <Bot size={22} />
-        {highCount > 0 && <span className="fp-badge">{highCount}</span>}
+        {unread && !open && <span className="fp-badge">1</span>}
       </button>
     </div>
   );
