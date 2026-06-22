@@ -62,6 +62,7 @@ export default function Home() {
   const [answer, setAnswer] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
   const [priorityAi, setPriorityAi] = useState("");
+  const [priorityItems, setPriorityItems] = useState<AiPriority[]>([]);
   const [loadingPriorityAi, setLoadingPriorityAi] = useState(false);
   // Acumulado real de toneladas transportadas (planes aprobados en Supabase).
   // null = Supabase no configurado/sin datos -> se usa el total del plan del dia.
@@ -550,20 +551,25 @@ export default function Home() {
   async function runPriorityAnalysis() {
     setLoadingPriorityAi(true);
     setPriorityAi("");
+    setPriorityItems([]);
     try {
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          format: "priorities",
           question:
-            "Prioriza los despachos hacia la refineria DANEC SANGOLQUI: primero las extractoras con acidez mas alta, validando que no excedan la capacidad libre de la refineria y que el material entrante (proveedores, importaciones, transito) tenga donde almacenarse; si una extractora del mismo producto esta copada y viene entrante, sugiere despacharla para liberar espacio. Indica prioridad, ubicacion, producto, toneladas sugeridas, motivo y riesgo.",
+            "Prioriza los despachos hacia la refineria DANEC SANGOLQUI: primero las extractoras con acidez mas alta, validando que no excedan la capacidad libre de la refineria y que el material entrante (proveedores, importaciones, transito) tenga donde almacenarse; si una extractora del mismo producto esta copada y viene entrante, sugiere despacharla para liberar espacio.",
           context: buildAiContext()
         })
       });
       const data = await response.json();
-      setPriorityAi(data.answer ?? "");
+      const answer = data.answer ?? "";
+      setPriorityAi(answer);
+      setPriorityItems(extractPriorities(answer));
     } catch {
       setPriorityAi("No se pudo completar el analisis de IA.");
+      setPriorityItems([]);
     } finally {
       setLoadingPriorityAi(false);
     }
@@ -706,7 +712,7 @@ export default function Home() {
 
         {view !== "ia" && (
           <FloatingPriorities
-            recommendations={recommendations}
+            items={priorityItems}
             aiText={priorityAi}
             loading={loadingPriorityAi}
             dataSource={dataSource}
@@ -1931,20 +1937,19 @@ function RecommendationsPanel({ recommendations }: { recommendations: ReturnType
 }
 
 function FloatingPriorities({
-  recommendations,
+  items,
   aiText,
   loading,
   dataSource
 }: {
-  recommendations: ReturnType<typeof buildRecommendations>;
+  items: AiPriority[];
   aiText: string;
   loading: boolean;
   dataSource: "demo" | "excel";
 }) {
   const [open, setOpen] = useState(false);
-  const highCount = recommendations.filter((item) => item.priority === "alta").length;
   const isDemo = dataSource !== "excel";
-  const aiItems = parseAiPriorities(aiText);
+  const highCount = items.filter((item) => item.priority === "alta" || item.priority === "crítica").length;
 
   return (
     <div className="floating-priorities">
@@ -1962,35 +1967,24 @@ function FloatingPriorities({
           <div className="fp-body">
             {isDemo && (
               <div className="fp-demo-note">
-                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver datos reales.
+                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver el análisis real.
               </div>
             )}
-            <div className={`recommendations${isDemo ? " is-demo" : ""}`}>
-              {recommendations.slice(0, 6).map((item) => (
-                <article className="rec" key={item.id}>
-                  <header>
-                    <h4>{item.title}</h4>
-                    <span className={`pill ${priorityPill(item.priority)}`}>{item.priority}</span>
-                  </header>
-                  <p>{item.detail}</p>
-                </article>
-              ))}
-            </div>
             <div className="fp-ai">
               <div className="fp-ai-title">
                 <Sparkles size={15} /> Análisis IA
               </div>
               {loading ? (
                 <div className="fp-ai-body">Analizando inventario con IA...</div>
-              ) : aiItems.length > 0 ? (
+              ) : items.length > 0 ? (
                 <div className="recommendations">
-                  {aiItems.map((item, index) => (
+                  {items.map((item, index) => (
                     <article className="rec" key={`ai-${index}`}>
                       <header>
                         <h4>{item.title}</h4>
                         <span className={`pill ${priorityPill(item.priority)}`}>{item.priority}</span>
                       </header>
-                      <p>{item.detail}</p>
+                      {item.detail && <p>{item.detail}</p>}
                     </article>
                   ))}
                 </div>
@@ -2100,6 +2094,50 @@ function parseAiPriorities(text: string): AiPriority[] {
     items.push({ priority, title: title || "Sugerencia IA", detail: detail || title });
   }
   return items;
+}
+
+// Modo robusto: el endpoint /api/ai con format "priorities" devuelve un arreglo JSON.
+// Construye titulo/detalle de forma determinista (titulo = ruta, detalle = resto).
+function parsePriorityJson(text: string): AiPriority[] {
+  if (!text) return [];
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start < 0 || end <= start) return [];
+  let arr: unknown;
+  try {
+    arr = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .slice(0, 6)
+    .map((raw): AiPriority | null => {
+      if (typeof raw !== "object" || raw === null) return null;
+      const obj = raw as Record<string, unknown>;
+      const ubicacion = String(obj.ubicacion ?? "").trim();
+      const producto = String(obj.producto ?? "").trim();
+      const ton = obj.toneladas;
+      const motivo = String(obj.motivo ?? "").trim();
+      const riesgo = String(obj.riesgo ?? "").trim();
+      const title = ubicacion || producto || "Sugerencia IA";
+      const detail = [
+        producto && ubicacion ? producto : "",
+        ton != null && ton !== "" && !Number.isNaN(Number(ton)) ? `${format(Number(ton))} t sugeridas` : "",
+        motivo,
+        riesgo ? `Riesgo: ${riesgo}` : ""
+      ]
+        .filter(Boolean)
+        .join(". ");
+      return { priority: normalizePriority(String(obj.prioridad ?? "media")), title, detail };
+    })
+    .filter((item): item is AiPriority => item !== null && Boolean(item.title));
+}
+
+// Intenta JSON (formato estructurado) y cae al parser de texto si el modelo no respeto JSON.
+function extractPriorities(text: string): AiPriority[] {
+  const json = parsePriorityJson(text);
+  return json.length > 0 ? json : parseAiPriorities(text);
 }
 
 function priorityPill(priority: string) {

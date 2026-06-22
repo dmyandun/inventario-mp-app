@@ -11,6 +11,7 @@ export async function POST(request: Request) {
   const body = await request.json();
   const question = String(body.question ?? "");
   const context = String(body.context ?? "");
+  const format = String(body.format ?? "");
 
   if (!process.env.HF_TOKEN) {
     return NextResponse.json({
@@ -40,21 +41,7 @@ export async function POST(request: Request) {
           messages: [
             {
               role: "system",
-              content: [
-                "Eres un planificador logistico de materia prima para la refineria DANEC SANGOLQUI.",
-                "Responde siempre en espanol.",
-                "Reglas de priorizacion del plan diario:",
-                "1) El cuello de botella es la CAPACIDAD DE RECEPCION de la refineria: estaciones CONFIGURABLES (lista 'stations'); cada estacion tiene un nombre, un cupo de tanqueros/dia (tankers) y los productos que puede recibir (productos). Un producto solo se recibe en la estacion a la que esta asignado. El plan debe LLENAR esos cupos entre semana para evitar horas extra el fin de semana.",
-                "2) Prioriza la materia prima de mayor acidez (top 25%) desde EXTRACTORAS y PUERTO: esos entran primero. Los cupos restantes de cada estacion se llenan por la ruta mas barata (minimo costo).",
-                "3) No exceder el almacenamiento libre de la refineria por producto (refineryFreeCapacity). Los productos que no esten asignados a ninguna estacion no pueden recibirse y quedan fuera del plan.",
-                "4) Usa SOLO las rutas habilitadas que vienen en routes (cada ruta es un par origen->destino activo); no sugieras movimientos por rutas que no esten en esa lista.",
-                "Equilibra llenar la recepcion (productividad semanal), acidez (calidad) y costo, sin exceder el almacenamiento de la refineria.",
-                "No muestres razonamiento interno, borradores, etiquetas <think> ni cadenas de pensamiento.",
-                "Entrega solo conclusiones accionables para operacion.",
-                "No uses Markdown, asteriscos, negritas, tablas ni encabezados decorativos.",
-                "Formato: bullets de texto plano con prioridad, ubicacion, producto, toneladas sugeridas, motivo (acidez o liberar espacio) y riesgo.",
-                "Usa maximo 6 bullets y cierra con una accion inmediata."
-              ].join(" ")
+              content: buildSystemPrompt(format)
             },
             {
               role: "user",
@@ -84,6 +71,42 @@ export async function POST(request: Request) {
     },
     { status: 502 }
   );
+}
+
+const priorityRules = [
+  "Reglas de priorizacion del plan diario:",
+  "1) El cuello de botella es la CAPACIDAD DE RECEPCION de la refineria: estaciones CONFIGURABLES (lista 'stations'); cada estacion tiene un nombre, un cupo de tanqueros/dia (tankers) y los productos que puede recibir (productos). Un producto solo se recibe en la estacion a la que esta asignado. El plan debe LLENAR esos cupos entre semana para evitar horas extra el fin de semana.",
+  "2) Prioriza la materia prima de mayor acidez (top 25%) desde EXTRACTORAS y PUERTO: esos entran primero. Los cupos restantes de cada estacion se llenan por la ruta mas barata (minimo costo).",
+  "3) No exceder el almacenamiento libre de la refineria por producto (refineryFreeCapacity). Los productos que no esten asignados a ninguna estacion no pueden recibirse y quedan fuera del plan.",
+  "4) Usa SOLO las rutas habilitadas que vienen en routes (cada ruta es un par origen->destino activo); no sugieras movimientos por rutas que no esten en esa lista.",
+  "Equilibra llenar la recepcion (productividad semanal), acidez (calidad) y costo, sin exceder el almacenamiento de la refineria.",
+  "No muestres razonamiento interno, borradores, etiquetas <think> ni cadenas de pensamiento."
+];
+
+function buildSystemPrompt(format: string) {
+  const base = [
+    "Eres un planificador logistico de materia prima para la refineria DANEC SANGOLQUI.",
+    "Responde siempre en espanol.",
+    ...priorityRules
+  ];
+
+  if (format === "priorities") {
+    return [
+      ...base,
+      "Responde EXCLUSIVAMENTE con un arreglo JSON valido, sin texto antes ni despues, sin markdown ni vinetas ni bloques de codigo.",
+      "Cada elemento del arreglo es un objeto con EXACTAMENTE estas claves:",
+      '{"prioridad": "alta|media|baja", "ubicacion": "<origen> -> DANEC SANGOLQUI", "producto": "<producto>", "toneladas": <numero entero>, "motivo": "<acidez o liberar espacio, frase breve>", "riesgo": "<frase breve>"}',
+      "Maximo 6 elementos, ordenados de mayor a menor prioridad. No incluyas ninguna otra clave ni texto fuera del arreglo."
+    ].join(" ");
+  }
+
+  return [
+    ...base,
+    "Entrega solo conclusiones accionables para operacion.",
+    "No uses Markdown, asteriscos, negritas, tablas ni encabezados decorativos.",
+    "Formato: bullets de texto plano con prioridad, ubicacion, producto, toneladas sugeridas, motivo (acidez o liberar espacio) y riesgo.",
+    "Usa maximo 6 bullets y cierra con una accion inmediata."
+  ].join(" ");
 }
 
 function getModelChain() {
