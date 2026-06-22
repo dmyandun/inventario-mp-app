@@ -1944,6 +1944,7 @@ function FloatingPriorities({
   const [open, setOpen] = useState(false);
   const highCount = recommendations.filter((item) => item.priority === "alta").length;
   const isDemo = dataSource !== "excel";
+  const aiItems = parseAiPriorities(aiText);
 
   return (
     <div className="floating-priorities">
@@ -1969,9 +1970,7 @@ function FloatingPriorities({
                 <article className="rec" key={item.id}>
                   <header>
                     <h4>{item.title}</h4>
-                    <span className={`pill ${item.priority === "alta" ? "risk" : item.priority === "media" ? "warn" : "ok"}`}>
-                      {item.priority}
-                    </span>
+                    <span className={`pill ${priorityPill(item.priority)}`}>{item.priority}</span>
                   </header>
                   <p>{item.detail}</p>
                 </article>
@@ -1981,15 +1980,29 @@ function FloatingPriorities({
               <div className="fp-ai-title">
                 <Sparkles size={15} /> Análisis IA
               </div>
-              <div className="fp-ai-body">
-                {loading
-                  ? "Analizando inventario con IA..."
-                  : aiText
+              {loading ? (
+                <div className="fp-ai-body">Analizando inventario con IA...</div>
+              ) : aiItems.length > 0 ? (
+                <div className="recommendations">
+                  {aiItems.map((item, index) => (
+                    <article className="rec" key={`ai-${index}`}>
+                      <header>
+                        <h4>{item.title}</h4>
+                        <span className={`pill ${priorityPill(item.priority)}`}>{item.priority}</span>
+                      </header>
+                      <p>{item.detail}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="fp-ai-body">
+                  {aiText
                     ? aiText
                     : dataSource === "excel"
                       ? "Sin análisis disponible."
                       : "Carga un Excel para generar el análisis de IA automáticamente."}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2042,6 +2055,55 @@ function viewSubtitle(view: View) {
 
 function format(value: number) {
   return Math.round(value).toLocaleString("es-EC");
+}
+
+type AiPriority = { priority: "crítica" | "alta" | "media" | "baja"; title: string; detail: string };
+
+function normalizePriority(word: string): AiPriority["priority"] {
+  const w = word.toLowerCase();
+  if (w.startsWith("crit") || w.startsWith("crít")) return "crítica";
+  return w as AiPriority["priority"];
+}
+
+// Convierte el texto del analisis IA en items priorizados para renderizar como
+// tarjetas. Acepta el formato real del modelo, p. ej.:
+//   "- Prioridad alta: PDE SHUSHUFINDI -> DANEC (ACEITE). 603 t ... Riesgo: ..."
+// y tambien "alta :: titulo :: detalle". Las lineas sin prioridad se omiten.
+function parseAiPriorities(text: string): AiPriority[] {
+  if (!text) return [];
+  const items: AiPriority[] = [];
+  for (const raw of text.split(/\r?\n+/)) {
+    const line = raw.replace(/^[\s\-*•▪·]+/, "").replace(/^\d+[.)]\s*/, "").trim();
+    if (!line) continue;
+
+    // Formato pedido "prioridad :: titulo :: detalle".
+    if (line.includes("::")) {
+      const parts = line.split("::").map((part) => part.trim());
+      const pWord = parts.find((part) => /^(prioridad\s+)?(cr[ií]tica|alta|media|baja)$/i.test(part));
+      const rest = parts.filter((part) => part !== pWord && part);
+      if (pWord) {
+        const priority = normalizePriority(pWord.replace(/prioridad\s+/i, ""));
+        const title = rest[0] ?? "Sugerencia IA";
+        items.push({ priority, title, detail: rest.slice(1).join(" — ") || title });
+        continue;
+      }
+    }
+
+    // Formato real: "Prioridad <nivel>: <titulo>. <detalle>".
+    const match = line.match(/^(?:prioridad\s+)?(cr[ií]tica|alta|media|baja)\b\s*[:.\-–]?\s*/i);
+    if (!match) continue;
+    const priority = normalizePriority(match[1]);
+    const rest = line.slice(match[0].length).trim();
+    const dot = rest.search(/\.\s/); // titulo = hasta el primer punto seguido de espacio
+    const title = dot > 0 ? rest.slice(0, dot).trim() : rest;
+    const detail = dot > 0 ? rest.slice(dot + 1).trim() : rest;
+    items.push({ priority, title: title || "Sugerencia IA", detail: detail || title });
+  }
+  return items;
+}
+
+function priorityPill(priority: string) {
+  return priority === "alta" || priority === "crítica" ? "risk" : priority === "media" ? "warn" : "ok";
 }
 
 function buildInventoryHistory(rows: InventoryRow[]) {
