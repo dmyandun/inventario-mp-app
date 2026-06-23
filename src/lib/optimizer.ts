@@ -130,7 +130,6 @@ export function buildDistributionPlan(
       occupancy: source.occupancy,
       acidez: source.row.acidez,
       urgency: source.row.acidez,
-      urgent: source.urgent,
       toneladas,
       camiones,
       viajesPorCamion,

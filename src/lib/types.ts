@@ -51,7 +51,6 @@ export type DistributionStop = {
   occupancy: number;
   acidez: number;
   urgency: number;
-  urgent: boolean;
   toneladas: number;
   camiones: number;
   viajesPorCamion: number;

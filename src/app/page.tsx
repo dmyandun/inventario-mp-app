@@ -18,6 +18,7 @@ import {
   Route,
   Save,
   SlidersHorizontal,
+  Sparkles,
   Trash2,
   Truck,
   X
@@ -60,8 +61,8 @@ export default function Home() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
-  // Marca cuando hay un plan nuevo (al cargar Excel) para el badge "no leido" del widget.
-  const [priorityStamp, setPriorityStamp] = useState(0);
+  const [priorityAi, setPriorityAi] = useState("");
+  const [loadingPriorityAi, setLoadingPriorityAi] = useState(false);
   // Acumulado real de toneladas transportadas (planes aprobados en Supabase).
   // null = Supabase no configurado/sin datos -> se usa el total del plan del dia.
   const [totalTransportado, setTotalTransportado] = useState<number | null>(null);
@@ -493,8 +494,6 @@ export default function Home() {
     if (!stationsFromRemote.current && !dirtyStations.current) {
       setStations(defaultStationSeed(Array.from(new Set(parsed.map((row) => row.producto)))));
     }
-    // Nuevo plan disponible -> enciende el badge "no leido" del widget.
-    setPriorityStamp((stamp) => stamp + 1);
   }
 
   async function askAi(customQuestion = question) {
@@ -548,6 +547,35 @@ export default function Home() {
     );
   }
 
+  async function runPriorityAnalysis() {
+    setLoadingPriorityAi(true);
+    setPriorityAi("");
+    try {
+      const response = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question:
+            "Prioriza los despachos hacia la refineria DANEC SANGOLQUI: primero las extractoras con acidez mas alta, validando que no excedan la capacidad libre de la refineria y que el material entrante (proveedores, importaciones, transito) tenga donde almacenarse; si una extractora del mismo producto esta copada y viene entrante, sugiere despacharla para liberar espacio. Indica prioridad, ubicacion, producto, toneladas sugeridas, motivo y riesgo.",
+          context: buildAiContext()
+        })
+      });
+      const data = await response.json();
+      setPriorityAi(data.answer ?? "");
+    } catch {
+      setPriorityAi("No se pudo completar el analisis de IA.");
+    } finally {
+      setLoadingPriorityAi(false);
+    }
+  }
+
+  // Al cargar un Excel, dispara automaticamente el analisis de IA de prioridades.
+  useEffect(() => {
+    if (dataSource === "excel") {
+      runPriorityAnalysis();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   return (
     <div className={`shell${navOpen ? "" : " nav-collapsed"}`}>
@@ -678,8 +706,9 @@ export default function Home() {
 
         {view !== "ia" && (
           <FloatingPriorities
-            plan={distributionPlan}
-            stamp={priorityStamp}
+            recommendations={recommendations}
+            aiText={priorityAi}
+            loading={loadingPriorityAi}
             dataSource={dataSource}
           />
         )}
@@ -1902,28 +1931,19 @@ function RecommendationsPanel({ recommendations }: { recommendations: ReturnType
 }
 
 function FloatingPriorities({
-  plan,
-  stamp,
+  recommendations,
+  aiText,
+  loading,
   dataSource
 }: {
-  plan: DistributionPlan;
-  stamp: number;
+  recommendations: ReturnType<typeof buildRecommendations>;
+  aiText: string;
+  loading: boolean;
   dataSource: "demo" | "excel";
 }) {
   const [open, setOpen] = useState(false);
-  // Indicador tipo "mensaje no leido": se enciende con un plan nuevo (al cargar Excel)
-  // y se apaga al abrir el widget. No es un conteo.
-  const [unread, setUnread] = useState(false);
+  const highCount = recommendations.filter((item) => item.priority === "alta").length;
   const isDemo = dataSource !== "excel";
-
-  useEffect(() => {
-    if (stamp > 0) setUnread(true);
-  }, [stamp]);
-
-  // Paradas del plan ordenadas por urgencia (acidez top 25%) y luego por toneladas.
-  const stops = [...plan.stops]
-    .sort((a, b) => Number(b.urgent) - Number(a.urgent) || b.toneladas - a.toneladas)
-    .slice(0, 6);
 
   return (
     <div className="floating-priorities">
@@ -1931,8 +1951,8 @@ function FloatingPriorities({
         <div className="fp-panel" role="dialog" aria-label="Prioridades sugeridas">
           <div className="fp-header">
             <div>
-              <h3>Prioridades de despacho</h3>
-              <span className="fp-sub">Por qué el plan envía estas unidades · {isDemo ? "vista previa demo" : "Excel cargado"}</span>
+              <h3>Prioridades sugeridas</h3>
+              <span className="fp-sub">Solo lectura · {isDemo ? "Vista previa · datos demo" : "Excel cargado"}</span>
             </div>
             <button className="fp-close" onClick={() => setOpen(false)} aria-label="Cerrar">
               <X size={18} />
@@ -1941,52 +1961,48 @@ function FloatingPriorities({
           <div className="fp-body">
             {isDemo && (
               <div className="fp-demo-note">
-                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver el plan real.
+                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver datos reales.
               </div>
             )}
+            <div className={`recommendations${isDemo ? " is-demo" : ""}`}>
+              {recommendations.slice(0, 6).map((item) => (
+                <article className="rec" key={item.id}>
+                  <header>
+                    <h4>{item.title}</h4>
+                    <span className={`pill ${item.priority === "alta" ? "risk" : item.priority === "media" ? "warn" : "ok"}`}>
+                      {item.priority}
+                    </span>
+                  </header>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
             <div className="fp-ai">
-              {stops.length > 0 ? (
-                <div className={`recommendations${isDemo ? " is-demo" : ""}`}>
-                  {stops.map((stop) => (
-                    <article className="rec" key={`${stop.origen}-${stop.tanque}-${stop.producto}`}>
-                      <header>
-                        <h4>{stop.origen}</h4>
-                        <span className={`pill ${priorityPill(stopPriority(stop))}`}>{stopPriority(stop)}</span>
-                      </header>
-                      <p>
-                        {stop.producto} · acidez {formatAcidez(stop.acidez)} · {format(stop.toneladas)} t ·{" "}
-                        {stop.camiones} camiones → {stop.estacion}
-                      </p>
-                      <p className="rec-motivo">{stopMotivo(stop)}</p>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="fp-ai-body">
-                  {dataSource === "excel"
-                    ? "El plan no sugiere despachos (revisa estaciones y rutas habilitadas)."
-                    : "Carga un Excel en Datos maestros para ver el plan de despacho."}
-                </div>
-              )}
+              <div className="fp-ai-title">
+                <Sparkles size={15} /> Análisis IA
+              </div>
+              <div className="fp-ai-body">
+                {loading
+                  ? "Analizando inventario con IA..."
+                  : aiText
+                    ? aiText
+                    : dataSource === "excel"
+                      ? "Sin análisis disponible."
+                      : "Carga un Excel para generar el análisis de IA automáticamente."}
+              </div>
             </div>
           </div>
         </div>
       )}
       <button
         className="fp-fab"
-        onClick={() =>
-          setOpen((value) => {
-            const next = !value;
-            if (next) setUnread(false);
-            return next;
-          })
-        }
+        onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-label="Prioridades sugeridas"
         title="Prioridades sugeridas"
       >
         <Bot size={22} />
-        {unread && !open && <span className="fp-badge">1</span>}
+        {highCount > 0 && <span className="fp-badge">{highCount}</span>}
       </button>
     </div>
   );
@@ -2026,35 +2042,6 @@ function viewSubtitle(view: View) {
 
 function format(value: number) {
   return Math.round(value).toLocaleString("es-EC");
-}
-
-// Prioridad de una parada del plan: urgente (acidez top 25%) = alta; presion de tanque
-// alta = media; resto = baja. Solo para el color/etiqueta del widget.
-function stopPriority(stop: DistributionPlan["stops"][number]): "alta" | "media" | "baja" {
-  if (stop.urgent) return "alta";
-  if (stop.occupancy > 0.85) return "media";
-  return "baja";
-}
-
-// Motivo determinista: explica por que el plan envia esta unidad.
-function stopMotivo(stop: DistributionPlan["stops"][number]) {
-  const parts: string[] = [];
-  if (stop.urgent) parts.push("Acidez en top 25%");
-  if (stop.occupancy > 0.85) parts.push(`tanque al ${Math.round(stop.occupancy * 100)}%`);
-  parts.push(`llena cupo de ${stop.estacion}`);
-  if (!stop.urgent) parts.push("por ruta de menor costo");
-  const text = parts.join(" · ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-// Acidez con decimales segun escala: 3 decimales si <1 (p. ej. 0.044), 1 si >=1.
-function formatAcidez(value: number) {
-  if (!Number.isFinite(value)) return "s/d";
-  return value < 1 ? value.toFixed(3) : value.toFixed(1);
-}
-
-function priorityPill(priority: string) {
-  return priority === "alta" || priority === "crítica" ? "risk" : priority === "media" ? "warn" : "ok";
 }
 
 function buildInventoryHistory(rows: InventoryRow[]) {
