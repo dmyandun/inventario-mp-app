@@ -37,7 +37,8 @@ export async function POST(request: Request) {
           temperature: 0.2,
           // Holgado: los modelos de razonamiento gastan tokens en <think> antes de
           // la respuesta; con poco presupuesto se truncaban a mitad del razonamiento.
-          max_tokens: 1600,
+          // El modo priorities emite JSON (mas verboso): se le da mas presupuesto.
+          max_tokens: format === "priorities" ? 3000 : 1600,
           messages: [
             {
               role: "system",
@@ -93,10 +94,12 @@ function buildSystemPrompt(format: string) {
   if (format === "priorities") {
     return [
       ...base,
-      "Responde EXCLUSIVAMENTE con un arreglo JSON valido, sin texto antes ni despues, sin markdown ni vinetas ni bloques de codigo.",
+      "Responde directo, sin razonar en voz alta, sin <think> ni texto antes o despues.",
+      "Responde EXCLUSIVAMENTE con un arreglo JSON valido, sin markdown ni vinetas ni bloques de codigo.",
       "Cada elemento del arreglo es un objeto con EXACTAMENTE estas claves:",
-      '{"prioridad": "alta|media|baja", "ubicacion": "<origen> -> DANEC SANGOLQUI", "producto": "<producto>", "toneladas": <numero entero>, "motivo": "<acidez o liberar espacio, frase breve>", "riesgo": "<frase breve>"}',
-      "Maximo 6 elementos, ordenados de mayor a menor prioridad. No incluyas ninguna otra clave ni texto fuera del arreglo."
+      '{"prioridad": "alta|media|baja", "ubicacion": "<origen> -> DANEC SANGOLQUI", "producto": "<producto>", "toneladas": <numero entero>, "motivo": "<frase breve>", "riesgo": "<frase breve>"}',
+      "Maximo 6 elementos, ordenados de mayor a menor prioridad. Motivo y riesgo en frases muy breves (max 8 palabras).",
+      "No incluyas ninguna otra clave ni texto fuera del arreglo."
     ].join(" ");
   }
 

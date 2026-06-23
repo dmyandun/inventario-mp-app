@@ -1997,7 +1997,9 @@ function FloatingPriorities({
               ) : (
                 <div className="fp-ai-body">
                   {aiText
-                    ? aiText
+                    ? looksLikeJson(aiText)
+                      ? "No se pudo generar el análisis priorizado. Vuelve a cargar el Excel para reintentar."
+                      : aiText
                     : dataSource === "excel"
                       ? "Sin análisis disponible."
                       : "Carga un Excel para generar el análisis de IA automáticamente."}
@@ -2108,42 +2110,81 @@ function parseAiPriorities(text: string): AiPriority[] {
   return items;
 }
 
+// Extrae los objetos JSON "{...}" completos de nivel superior de un texto, ignorando
+// llaves dentro de strings. Un objeto final truncado (sin "}") se descarta. Esto permite
+// rescatar las tarjetas que SI llegaron completas aunque la respuesta venga cortada.
+function extractJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+    } else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "}") {
+      if (depth > 0) {
+        depth -= 1;
+        if (depth === 0 && start >= 0) {
+          objects.push(text.slice(start, i + 1));
+          start = -1;
+        }
+      }
+    }
+  }
+  return objects;
+}
+
 // Modo robusto: el endpoint /api/ai con format "priorities" devuelve un arreglo JSON.
 // Construye titulo/detalle de forma determinista (titulo = ruta, detalle = resto).
+// Tolerante a JSON parcial: parsea objeto por objeto y omite el truncado del final.
 function parsePriorityJson(text: string): AiPriority[] {
   if (!text) return [];
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start < 0 || end <= start) return [];
-  let arr: unknown;
-  try {
-    arr = JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return [];
+  const items: AiPriority[] = [];
+  for (const objStr of extractJsonObjects(text)) {
+    let obj: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(objStr);
+      if (typeof parsed !== "object" || parsed === null) continue;
+      obj = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (!("prioridad" in obj) && !("ubicacion" in obj)) continue;
+    const ubicacion = String(obj.ubicacion ?? "").trim();
+    const producto = String(obj.producto ?? "").trim();
+    const ton = obj.toneladas;
+    const motivo = String(obj.motivo ?? "").trim();
+    const riesgo = String(obj.riesgo ?? "").trim();
+    const title = ubicacion || producto || "Sugerencia IA";
+    const detail = [
+      producto && ubicacion ? producto : "",
+      ton != null && ton !== "" && !Number.isNaN(Number(ton)) ? `${format(Number(ton))} t sugeridas` : "",
+      motivo,
+      riesgo ? `Riesgo: ${riesgo}` : ""
+    ]
+      .filter(Boolean)
+      .join(". ");
+    items.push({ priority: normalizePriority(String(obj.prioridad ?? "media")), title, detail });
+    if (items.length >= 6) break;
   }
-  if (!Array.isArray(arr)) return [];
-  return arr
-    .slice(0, 6)
-    .map((raw): AiPriority | null => {
-      if (typeof raw !== "object" || raw === null) return null;
-      const obj = raw as Record<string, unknown>;
-      const ubicacion = String(obj.ubicacion ?? "").trim();
-      const producto = String(obj.producto ?? "").trim();
-      const ton = obj.toneladas;
-      const motivo = String(obj.motivo ?? "").trim();
-      const riesgo = String(obj.riesgo ?? "").trim();
-      const title = ubicacion || producto || "Sugerencia IA";
-      const detail = [
-        producto && ubicacion ? producto : "",
-        ton != null && ton !== "" && !Number.isNaN(Number(ton)) ? `${format(Number(ton))} t sugeridas` : "",
-        motivo,
-        riesgo ? `Riesgo: ${riesgo}` : ""
-      ]
-        .filter(Boolean)
-        .join(". ");
-      return { priority: normalizePriority(String(obj.prioridad ?? "media")), title, detail };
-    })
-    .filter((item): item is AiPriority => item !== null && Boolean(item.title));
+  return items;
+}
+
+// Heuristica: el texto parece JSON (arreglo/objeto) y por tanto NO debe mostrarse crudo.
+function looksLikeJson(text: string) {
+  const t = text.trim();
+  return t.startsWith("[") || t.startsWith("{");
 }
 
 // Intenta JSON (formato estructurado) y cae al parser de texto si el modelo no respeto JSON.
