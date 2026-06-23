@@ -18,7 +18,6 @@ import {
   Route,
   Save,
   SlidersHorizontal,
-  Sparkles,
   Trash2,
   Truck,
   X
@@ -61,11 +60,8 @@ export default function Home() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
-  // Motivo IA por indice (1-based) de la lista de recomendaciones; aditivo sobre los datos
-  // deterministas. priorityStamp marca cuando hay un analisis nuevo (badge "no leido").
-  const [motivos, setMotivos] = useState<Record<number, string>>({});
+  // Marca cuando hay un plan nuevo (al cargar Excel) para el badge "no leido" del widget.
   const [priorityStamp, setPriorityStamp] = useState(0);
-  const [loadingPriorityAi, setLoadingPriorityAi] = useState(false);
   // Acumulado real de toneladas transportadas (planes aprobados en Supabase).
   // null = Supabase no configurado/sin datos -> se usa el total del plan del dia.
   const [totalTransportado, setTotalTransportado] = useState<number | null>(null);
@@ -497,6 +493,8 @@ export default function Home() {
     if (!stationsFromRemote.current && !dirtyStations.current) {
       setStations(defaultStationSeed(Array.from(new Set(parsed.map((row) => row.producto)))));
     }
+    // Nuevo plan disponible -> enciende el badge "no leido" del widget.
+    setPriorityStamp((stamp) => stamp + 1);
   }
 
   async function askAi(customQuestion = question) {
@@ -550,44 +548,6 @@ export default function Home() {
     );
   }
 
-  async function runPriorityAnalysis() {
-    setLoadingPriorityAi(true);
-    setMotivos({});
-    // Las tarjetas salen del calculo determinista; la IA solo anota el "motivo" por indice.
-    const top = recommendations.slice(0, 6);
-    const lista = top
-      .map(
-        (item, index) =>
-          `${index + 1}. ${item.source} | ${item.product} | acidez ${item.acidez} | ${item.suggestedTons} t`
-      )
-      .join("\n");
-    try {
-      const response = await fetch("/api/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          format: "priorities",
-          question: `Despachos ya priorizados hacia DANEC SANGOLQUI:\n${lista}`,
-          context: buildAiContext()
-        })
-      });
-      const data = await response.json();
-      setMotivos(parseMotivos(data.answer ?? ""));
-    } catch {
-      setMotivos({});
-    } finally {
-      setLoadingPriorityAi(false);
-      setPriorityStamp((stamp) => stamp + 1);
-    }
-  }
-
-  // Al cargar un Excel, dispara automaticamente el analisis de IA de prioridades.
-  useEffect(() => {
-    if (dataSource === "excel") {
-      runPriorityAnalysis();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows]);
 
   return (
     <div className={`shell${navOpen ? "" : " nav-collapsed"}`}>
@@ -718,10 +678,8 @@ export default function Home() {
 
         {view !== "ia" && (
           <FloatingPriorities
-            recommendations={recommendations.slice(0, 6)}
-            motivos={motivos}
+            plan={distributionPlan}
             stamp={priorityStamp}
-            loading={loadingPriorityAi}
             dataSource={dataSource}
           />
         )}
@@ -1944,20 +1902,16 @@ function RecommendationsPanel({ recommendations }: { recommendations: ReturnType
 }
 
 function FloatingPriorities({
-  recommendations,
-  motivos,
+  plan,
   stamp,
-  loading,
   dataSource
 }: {
-  recommendations: ReturnType<typeof buildRecommendations>;
-  motivos: Record<number, string>;
+  plan: DistributionPlan;
   stamp: number;
-  loading: boolean;
   dataSource: "demo" | "excel";
 }) {
   const [open, setOpen] = useState(false);
-  // Indicador tipo "mensaje no leido": se enciende al completar un analisis nuevo
+  // Indicador tipo "mensaje no leido": se enciende con un plan nuevo (al cargar Excel)
   // y se apaga al abrir el widget. No es un conteo.
   const [unread, setUnread] = useState(false);
   const isDemo = dataSource !== "excel";
@@ -1966,14 +1920,19 @@ function FloatingPriorities({
     if (stamp > 0) setUnread(true);
   }, [stamp]);
 
+  // Paradas del plan ordenadas por urgencia (acidez top 25%) y luego por toneladas.
+  const stops = [...plan.stops]
+    .sort((a, b) => Number(b.urgent) - Number(a.urgent) || b.toneladas - a.toneladas)
+    .slice(0, 6);
+
   return (
     <div className="floating-priorities">
       {open && (
         <div className="fp-panel" role="dialog" aria-label="Prioridades sugeridas">
           <div className="fp-header">
             <div>
-              <h3>Prioridades sugeridas</h3>
-              <span className="fp-sub">Solo lectura · {isDemo ? "Vista previa · datos demo" : "Excel cargado"}</span>
+              <h3>Prioridades de despacho</h3>
+              <span className="fp-sub">Por qué el plan envía estas unidades · {isDemo ? "vista previa demo" : "Excel cargado"}</span>
             </div>
             <button className="fp-close" onClick={() => setOpen(false)} aria-label="Cerrar">
               <X size={18} />
@@ -1982,35 +1941,31 @@ function FloatingPriorities({
           <div className="fp-body">
             {isDemo && (
               <div className="fp-demo-note">
-                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver el análisis real.
+                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver el plan real.
               </div>
             )}
             <div className="fp-ai">
-              <div className="fp-ai-title">
-                <Sparkles size={15} /> Prioridades de despacho
-              </div>
-              {recommendations.length > 0 ? (
+              {stops.length > 0 ? (
                 <div className={`recommendations${isDemo ? " is-demo" : ""}`}>
-                  {recommendations.map((item, index) => (
-                    <article className="rec" key={item.id}>
+                  {stops.map((stop) => (
+                    <article className="rec" key={`${stop.origen}-${stop.tanque}-${stop.producto}`}>
                       <header>
-                        <h4>{item.source}</h4>
-                        <span className={`pill ${priorityPill(item.priority)}`}>{item.priority}</span>
+                        <h4>{stop.origen}</h4>
+                        <span className={`pill ${priorityPill(stopPriority(stop))}`}>{stopPriority(stop)}</span>
                       </header>
                       <p>
-                        {item.product} · acidez {formatAcidez(item.acidez)} · {format(item.suggestedTons)} t
+                        {stop.producto} · acidez {formatAcidez(stop.acidez)} · {format(stop.toneladas)} t ·{" "}
+                        {stop.camiones} camiones → {stop.estacion}
                       </p>
-                      <p className="rec-motivo">
-                        {loading && !motivos[index + 1] ? "Analizando motivo…" : motivos[index + 1] ?? item.reason}
-                      </p>
+                      <p className="rec-motivo">{stopMotivo(stop)}</p>
                     </article>
                   ))}
                 </div>
               ) : (
                 <div className="fp-ai-body">
                   {dataSource === "excel"
-                    ? "Sin recomendaciones disponibles."
-                    : "Carga un Excel en Datos maestros para ver las prioridades."}
+                    ? "El plan no sugiere despachos (revisa estaciones y rutas habilitadas)."
+                    : "Carga un Excel en Datos maestros para ver el plan de despacho."}
                 </div>
               )}
             </div>
@@ -2073,57 +2028,23 @@ function format(value: number) {
   return Math.round(value).toLocaleString("es-EC");
 }
 
-// Extrae los objetos JSON "{...}" completos de nivel superior de un texto, ignorando
-// llaves dentro de strings. Un objeto final truncado (sin "}") se descarta. Esto permite
-// rescatar las tarjetas que SI llegaron completas aunque la respuesta venga cortada.
-function extractJsonObjects(text: string): string[] {
-  const objects: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inStr = false;
-  let esc = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') {
-      inStr = true;
-    } else if (ch === "{") {
-      if (depth === 0) start = i;
-      depth += 1;
-    } else if (ch === "}") {
-      if (depth > 0) {
-        depth -= 1;
-        if (depth === 0 && start >= 0) {
-          objects.push(text.slice(start, i + 1));
-          start = -1;
-        }
-      }
-    }
-  }
-  return objects;
+// Prioridad de una parada del plan: urgente (acidez top 25%) = alta; presion de tanque
+// alta = media; resto = baja. Solo para el color/etiqueta del widget.
+function stopPriority(stop: DistributionPlan["stops"][number]): "alta" | "media" | "baja" {
+  if (stop.urgent) return "alta";
+  if (stop.occupancy > 0.85) return "media";
+  return "baja";
 }
 
-// La IA (modo priorities) solo anota el motivo: devuelve [{"i":<n>,"motivo":"..."}].
-// Tolerante a JSON parcial: lee los objetos completos y arma un mapa indice -> motivo.
-function parseMotivos(text: string): Record<number, string> {
-  const motivos: Record<number, string> = {};
-  if (!text) return motivos;
-  for (const objStr of extractJsonObjects(text)) {
-    try {
-      const obj = JSON.parse(objStr) as Record<string, unknown>;
-      const i = Number(obj.i);
-      const motivo = String(obj.motivo ?? "").trim();
-      if (Number.isInteger(i) && i > 0 && motivo) motivos[i] = motivo;
-    } catch {
-      continue;
-    }
-  }
-  return motivos;
+// Motivo determinista: explica por que el plan envia esta unidad.
+function stopMotivo(stop: DistributionPlan["stops"][number]) {
+  const parts: string[] = [];
+  if (stop.urgent) parts.push("Acidez en top 25%");
+  if (stop.occupancy > 0.85) parts.push(`tanque al ${Math.round(stop.occupancy * 100)}%`);
+  parts.push(`llena cupo de ${stop.estacion}`);
+  if (!stop.urgent) parts.push("por ruta de menor costo");
+  const text = parts.join(" · ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 // Acidez con decimales segun escala: 3 decimales si <1 (p. ej. 0.044), 1 si >=1.
