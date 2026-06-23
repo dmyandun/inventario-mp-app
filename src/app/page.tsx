@@ -706,7 +706,6 @@ export default function Home() {
 
         {view !== "ia" && (
           <FloatingPriorities
-            recommendations={recommendations}
             aiText={priorityAi}
             loading={loadingPriorityAi}
             dataSource={dataSource}
@@ -1931,19 +1930,18 @@ function RecommendationsPanel({ recommendations }: { recommendations: ReturnType
 }
 
 function FloatingPriorities({
-  recommendations,
   aiText,
   loading,
   dataSource
 }: {
-  recommendations: ReturnType<typeof buildRecommendations>;
   aiText: string;
   loading: boolean;
   dataSource: "demo" | "excel";
 }) {
   const [open, setOpen] = useState(false);
-  const highCount = recommendations.filter((item) => item.priority === "alta").length;
   const isDemo = dataSource !== "excel";
+  const { cards, footer } = parseAiCards(aiText);
+  const highCount = cards.filter((card) => card.priority === "alta" || card.priority === "crítica").length;
 
   return (
     <div className="floating-priorities">
@@ -1961,35 +1959,45 @@ function FloatingPriorities({
           <div className="fp-body">
             {isDemo && (
               <div className="fp-demo-note">
-                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver datos reales.
+                Vista previa con datos de ejemplo. Carga el Excel en Datos maestros para ver el análisis real.
               </div>
             )}
-            <div className={`recommendations${isDemo ? " is-demo" : ""}`}>
-              {recommendations.slice(0, 6).map((item) => (
-                <article className="rec" key={item.id}>
-                  <header>
-                    <h4>{item.title}</h4>
-                    <span className={`pill ${item.priority === "alta" ? "risk" : item.priority === "media" ? "warn" : "ok"}`}>
-                      {item.priority}
-                    </span>
-                  </header>
-                  <p>{item.detail}</p>
-                </article>
-              ))}
-            </div>
             <div className="fp-ai">
               <div className="fp-ai-title">
                 <Sparkles size={15} /> Análisis IA
               </div>
-              <div className="fp-ai-body">
-                {loading
-                  ? "Analizando inventario con IA..."
-                  : aiText
-                    ? aiText
-                    : dataSource === "excel"
-                      ? "Sin análisis disponible."
-                      : "Carga un Excel para generar el análisis de IA automáticamente."}
-              </div>
+              {loading ? (
+                <div className="fp-ai-body">Analizando inventario con IA...</div>
+              ) : cards.length > 0 ? (
+                <>
+                  <div className={`recommendations${isDemo ? " is-demo" : ""}`}>
+                    {cards.map((card, index) => (
+                      <article className="rec" key={`${card.title}-${index}`}>
+                        <header>
+                          <h4>{card.title}</h4>
+                          <span className={`pill ${priorityPill(card.priority)}`}>{card.priority}</span>
+                        </header>
+                        {card.detail && <p>{card.detail}</p>}
+                        {(card.motivo || card.riesgo) && (
+                          <p className="rec-meta">
+                            {card.motivo && <span>Motivo: {card.motivo}</span>}
+                            {card.riesgo && <span>Riesgo: {card.riesgo}</span>}
+                          </p>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                  {footer && <div className="fp-footer">{footer}</div>}
+                </>
+              ) : aiText ? (
+                <div className="fp-ai-body">{aiText}</div>
+              ) : (
+                <div className="fp-ai-body">
+                  {dataSource === "excel"
+                    ? "Sin análisis disponible."
+                    : "Carga un Excel en Datos maestros para generar el análisis."}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2042,6 +2050,64 @@ function viewSubtitle(view: View) {
 
 function format(value: number) {
   return Math.round(value).toLocaleString("es-EC");
+}
+
+type AiCard = {
+  priority: "crítica" | "alta" | "media" | "baja";
+  title: string;
+  detail: string;
+  motivo: string;
+  riesgo: string;
+};
+
+function priorityPill(priority: string) {
+  return priority === "alta" || priority === "crítica" ? "risk" : priority === "media" ? "warn" : "ok";
+}
+
+// Convierte el texto del Analisis IA (vinetas "Prioridad <nivel>: <origen> -> <producto>,
+// <tons> a <estacion>. Motivo: ... Riesgo: ...") en tarjetas. Tolerante a variaciones; las
+// lineas sin prioridad se omiten salvo "Accion inmediata", que se devuelve como footer.
+function parseAiCards(text: string): { cards: AiCard[]; footer: string } {
+  const cards: AiCard[] = [];
+  let footer = "";
+  if (!text) return { cards, footer };
+
+  for (const raw of text.split(/\r?\n+/)) {
+    const line = raw.replace(/^[\s\-*•▪·]+/, "").replace(/^\d+[.)]\s*/, "").trim();
+    if (!line) continue;
+
+    if (/^acci[oó]n inmediata\s*:/i.test(line)) {
+      footer = line.replace(/^acci[oó]n inmediata\s*:\s*/i, "").trim();
+      continue;
+    }
+
+    const match = line.match(/^prioridad\s+(cr[ií]tica|alta|media|baja)\s*[:.-]\s*/i);
+    if (!match) continue;
+    const priority = (match[1].toLowerCase().startsWith("cr") ? "crítica" : match[1].toLowerCase()) as AiCard["priority"];
+    const rest = line.slice(match[0].length).trim();
+
+    // Titulo = origen (antes de "->"); si no hay flecha, primera clausula antes de coma.
+    const arrow = rest.indexOf("->");
+    let title: string;
+    let body: string;
+    if (arrow > 0) {
+      title = rest.slice(0, arrow).trim();
+      body = rest.slice(arrow + 2).trim();
+    } else {
+      const comma = rest.indexOf(",");
+      title = (comma > 0 ? rest.slice(0, comma) : rest).trim();
+      body = comma > 0 ? rest.slice(comma + 1).trim() : rest;
+    }
+
+    // Separar Motivo / Riesgo del detalle principal.
+    const motivo = (body.match(/motivo\s*:\s*([^]*?)(?=\s*riesgo\s*:|$)/i)?.[1] ?? "").trim().replace(/\.\s*$/, "");
+    const riesgo = (body.match(/riesgo\s*:\s*([^]*)$/i)?.[1] ?? "").trim().replace(/\.\s*$/, "");
+    const detail = body.split(/\s*motivo\s*:/i)[0].trim().replace(/[.,;\s]*$/, "");
+
+    cards.push({ priority, title: title || "Sugerencia", detail, motivo, riesgo });
+  }
+
+  return { cards, footer };
 }
 
 function buildInventoryHistory(rows: InventoryRow[]) {

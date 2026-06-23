@@ -861,6 +861,23 @@ th {
   line-height: 1.4;
 }
 
+.rec-meta {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.fp-footer {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #eef1e8;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .ai-box {
   display: grid;
   gap: 10px;
