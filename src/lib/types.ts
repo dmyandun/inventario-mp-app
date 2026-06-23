@@ -74,6 +74,8 @@ export type Recommendation = {
   suggestedTons: number;
   source: string;
   product: string;
+  acidez: number;
+  reason: string;
   acidPenalty: number;
   logisticsScore: number;
 };

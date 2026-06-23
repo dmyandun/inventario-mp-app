@@ -342,11 +342,24 @@ export function buildRecommendations(
         suggestedTons: Math.round(suggestedTons),
         source: row.nombre,
         product: row.producto,
+        acidez: row.acidez,
+        reason: buildReason(row, acidityPenalty, routeCost),
         acidPenalty: Math.round(acidityPenalty),
         logisticsScore: Math.round(logisticsScore)
       };
     })
     .sort((a, b) => b.logisticsScore - a.logisticsScore);
+}
+
+// Motivo determinista breve: factor dominante por el que priorizar el despacho.
+function buildReason(row: InventoryRow, acidityPenalty: number, routeCost: number) {
+  if (acidityPenalty > 0) return "Acidez elevada, despachar primero";
+  const occupancy = row.capacidad > 0 ? row.disponible / row.capacidad : 0;
+  if (occupancy > 0.9) return "Tanque casi lleno, liberar espacio";
+  if (row.diasRetrazo > 0) return `Retraso de ${row.diasRetrazo} días`;
+  if (row.pendienteRetiro > 0) return "Pendiente de retiro en proveedor";
+  if (routeCost !== 9999 && routeCost < 100) return "Ruta de bajo costo";
+  return "Stock disponible para despacho";
 }
 
 function buildDetail(row: InventoryRow, routeCost: number, suggestedTons: number) {

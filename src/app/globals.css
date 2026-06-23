@@ -861,6 +861,19 @@ th {
   line-height: 1.4;
 }
 
+.rec-motivo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--green) !important;
+  font-weight: 600;
+}
+
+.rec-motivo::before {
+  content: "✦";
+  font-size: 11px;
+}
+
 .ai-box {
   display: grid;
   gap: 10px;
